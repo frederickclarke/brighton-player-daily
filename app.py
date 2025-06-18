@@ -1,0 +1,291 @@
+import os  # Import the os module for interacting with the operating system
+import pandas as pd  # Import pandas for data handling
+from datetime import datetime  # Import datetime for working with dates
+import google.generativeai as genai
+from flask import Flask, jsonify, request, render_template  # Import Flask and related functions for web server
+import random
+from dotenv import load_dotenv
+
+# --- Gemini Configuration ---
+# In a real app, you would use a .env file for your API key.
+# For this guide, we will leave it blank as the execution environment will handle it.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    model = None
+    print("WARNING: GEMINI_API_KEY is not set. AI features will be disabled.")
+
+# Initialize Flask App
+app = Flask(__name__)  # Create a new Flask web application
+app.debug = os.environ.get('FLASK_ENV') == 'development' or os.environ.get('DEBUG') == '1' or app.debug
+
+# --- Data Loading and Processing ---
+try:
+    # Load the CSV file containing player data into a pandas DataFrame
+    players_df = pd.read_csv('brighton_players.csv', quotechar='"', escapechar='\\', on_bad_lines='skip')
+    print("DEBUG: Columns after loading:", players_df.columns.tolist())  # Print the column names for debugging
+    print("DEBUG: First 5 rows after loading:\n", players_df.head())  # Print the first 5 rows for debugging
+
+    # Remove any rows where the player's name or date of birth is missing
+    players_df = players_df.dropna(subset=['name', 'date of birth']).reset_index(drop=True)
+
+    # Find and print any rows where the name is empty or just spaces (should be none)
+    empty_name_rows = players_df[players_df['name'].str.strip() == '']
+    print('DEBUG: Rows with empty or whitespace-only names:')
+    print(empty_name_rows)
+
+    # Function to split a player's full name into first and last name
+    def split_name(name):
+        if pd.isna(name):  # If the name is missing, return empty strings
+            return "", ""
+        name_str = str(name).strip().strip('"')  # Clean up the name
+        if ' ' in name_str:  # If there is a space, split into first and last
+            parts = name_str.split(' ', 1)
+            return parts[0], parts[1]
+        else:  # If no space, treat the whole name as first name
+            return name_str, ""
+
+    # Apply the split_name function to every player's name
+    split_results = list(players_df['name'].map(split_name))
+    print("DEBUG: split_name results (first 10):", split_results[:10])  # Show first 10 results
+    print("DEBUG: Any non-2-length tuples?", [x for x in split_results if len(x) != 2])  # Check for errors
+    players_df['first name'], players_df['last name'] = zip(*split_results)  # Add new columns for first and last name
+
+    # Make sure all name and date fields are strings (not missing)
+    players_df['first name'] = players_df['first name'].fillna("").astype(str)
+    players_df['last name'] = players_df['last name'].fillna("").astype(str)
+    players_df['date of birth'] = players_df['date of birth'].fillna("").astype(str)
+    # Ensure new columns are present and fill missing values with empty strings
+    for col in ['seasons played at Brighton', 'seasons at brighton during second spell']:
+        if col not in players_df.columns:
+            players_df[col] = ''
+        else:
+            players_df[col] = players_df[col].fillna("").astype(str)
+
+    players_df = players_df.fillna("")
+
+    print("--- Successfully loaded and processed CSV ---")
+    print(players_df.head())  # Show first few rows after processing
+
+except FileNotFoundError:
+    # If the CSV file is missing, print an error and stop the app
+    print("FATAL ERROR: 'brighton_players.csv' not found. Make sure it's in the same directory as app.py.")
+    exit()
+except Exception as e:
+    # If any other error occurs, print it and stop the app
+    print(f"FATAL ERROR loading or processing the CSV: {e}")
+    exit()
+
+current_player_index = None  # Global override for local testing
+
+@app.route('/api/set-player', methods=['POST'])
+def set_player():
+    global current_player_index
+    if not app.debug:
+        return jsonify({'error': 'Not allowed in production'}), 403
+    data = request.json
+    idx = int(data.get('player_id', 0))
+    if 0 <= idx < len(players_df):
+        current_player_index = idx
+        return jsonify({'success': True})
+    else:
+        return jsonify({'error': 'Invalid player index'}), 400
+
+def get_daily_player():
+    global current_player_index
+    if app.debug and current_player_index is not None:
+        player = players_df.iloc[current_player_index]
+    else:
+        day_of_year = datetime.now().timetuple().tm_yday
+        player_index = (day_of_year - 1) % len(players_df)
+        player = players_df.iloc[player_index]
+    print(f"DEBUG: Selected player: {player.to_dict()}")
+    return player
+
+def build_clues(player, seed=None):
+    """
+    Build a list of clues for a player, avoiding clues that repeat the same facts.
+    Each clue is tagged with the facts it uses. Only one clue per fact is included.
+    """
+    facts_used = set()
+    clues = []
+    # Custom logic for the 'left_for' clue
+    left_for_value = player['Team played for after Brighton and Hove Albion (first spell)']
+    if isinstance(left_for_value, str):
+        if 'Retired' in left_for_value:
+            left_for_clue = ""
+        elif left_for_value.strip() == 'Still at club':
+            left_for_clue = "This player is still at the club."
+        else:
+            left_for_clue = f"This player left Brighton to join {left_for_value}"
+    else:
+        left_for_clue = ""
+    # Define clues with their fact tags (as sets)
+    clue_defs = [
+        (f"This player was born on {player['date of birth']}, in {player['place of birth']}, {player['country of birth']}.", {'birth'}),
+        (f"This player made {player['Brighton and Hove Albion league appearances']} league appearances for Brighton.", {'appearances'}),
+        (f"This player joined Brighton from {player['Team played for before Brighton and Hove Albion (first spell)']}", {'joined_from'}),
+        (left_for_clue, {'left_for'}),
+        (f"This player is a {player['position']}.", {'position'}),
+        (f"This player was born in {player['place of birth']}, {player['country of birth']} and has {player['number of spells at Brighton and Hove Albion']} spell(s) at Brighton.", {'birth', 'spells'}),
+        (f"Seasons played at Brighton: {player['seasons played at Brighton']}" if player['seasons played at Brighton'] else "", {'seasons'}),
+        (f"Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}" if player['seasons at brighton during second spell'] else "", {'seasons2'}),
+    ]
+    # Remove empty clues
+    clue_defs = [(clue, tags) for clue, tags in clue_defs if clue.strip()]
+    # Shuffle clues deterministically
+    if seed is None:
+        seed = str(datetime.now().date()) + str(player.name)
+    rng = random.Random(seed)
+    rng.shuffle(clue_defs)
+    for clue, tags in clue_defs:
+        if not tags & facts_used:  # Only add if none of the tags have been used
+            clues.append(clue)
+            facts_used.update(tags)
+    return clues
+
+# --- API Routes ---
+@app.route('/api/daily-challenge', methods=['GET'])  # Define a web API endpoint for the daily challenge
+def get_challenge():
+    try:
+        player = get_daily_player()  # Get today's player
+        clues = build_clues(player)
+        return jsonify({
+            'firstNameLength': len(player['first name']),
+            'lastNameLength': len(player['last name']),
+            'firstClue': clues[0],
+            'player_id': int(player.name),
+            'firstName': player['first name'],
+            'lastName': player['last name']
+        })
+    except KeyError as e:
+        # If a column is missing, return an error
+        return jsonify({'error': f"A column is missing in the CSV file: {e}"}), 500
+    except Exception as e:
+        # If any other error occurs, return an error
+        return jsonify({'error': f"An unexpected error occurred: {e}"}), 500
+
+@app.route('/api/clues', methods=['POST'])  # Define a web API endpoint for getting more clues
+def get_clue():
+    try:
+        data = request.json  # Get the data sent by the frontend
+        player_id = data.get('player_id')  # Get the player's index
+        player = players_df.iloc[int(player_id)]  # Get the player's data
+        clues = build_clues(player, seed=str(datetime.now().date()) + str(player_id))
+        return jsonify({'clue': clues[data.get('clue_index', 0)]})  # Return the requested clue
+    except KeyError as e:
+        # If a column is missing, return an error
+        return jsonify({'error': f"A column is missing in the CSV file for clues: {e}"}), 500
+    except Exception as e:
+        # If any other error occurs, return an error
+        return jsonify({'error': f"An unexpected error occurred getting clues: {e}"}), 500
+
+@app.route('/api/guess', methods=['POST'])  # Define a web API endpoint for checking a guess
+def check_guess():
+    try:
+        data = request.json  # Get the data sent by the frontend
+        player_id = data.get('player_id')  # Get the player's index
+        guess_first = data.get('guess_first', '').lower()  # Get the guessed first name (lowercase)
+        guess_last = data.get('guess_last', '').lower()  # Get the guessed last name (lowercase)
+        player = players_df.iloc[int(player_id)]  # Get the player's data
+        # Check if the guess matches the player's name
+        is_correct = (guess_first == player['first name'].lower() and
+                      guess_last == player['last name'].lower())
+        response = {'correct': is_correct}  # Prepare the response
+        if is_correct:
+            # If correct, include the full name
+            response['fullName'] = f"{player['first name']} {player['last name']}".strip()
+        return jsonify(response)  # Return whether the guess was correct
+    except KeyError as e:
+        # If a column is missing, return an error
+        return jsonify({'error': f"A column is missing in the CSV file for guessing: {e}"}), 500
+    except Exception as e:
+        # If any other error occurs, return an error
+        return jsonify({'error': f"An unexpected error occurred while guessing: {e}"}), 500
+
+# --- Gemini API Routes ---
+@app.route('/api/cryptic-clue', methods=['POST'])
+def get_cryptic_clue():
+    if not model:
+        return jsonify({'error': 'AI features are not configured.'}), 503
+        
+    try:
+        data = request.json
+        player = players_df.iloc[int(data['player_id'])]
+        prompt = f"""
+        You are a witty and intelligent cryptic clue setter for a football guessing game.
+        Your task is to create a single, short, clever, cryptic clue based on wordplay of the footballer's name: "{player['name']}".
+
+        **Instructions:**
+        1.  The clue MUST be based on the sound, spelling, or meaning of the player's name (first, last, or both).
+        2.  Do NOT use biographical information like their position, nationality, or former clubs. The clue must be about the name itself.
+        3.  Keep it short and punchy.
+        4.  Do not reveal the answer or the player's name in your response.
+
+        **Examples of good clues:**
+        - For a player named "Gross": "Sounds like an unpleasant amount of goals."
+        - For a player named "Dunk": "To submerge a biscuit, or a type of slam in basketball."
+        - For a player named "Lallana": "This player's name sounds like a gentle song."
+        - For a player named "March": "The third month of the year, or to walk in a military manner."
+
+        Now, generate a cryptic clue for: "{player['name']}"
+        """
+
+        response = model.generate_content(prompt)
+        return jsonify({'clue': response.text})
+    except Exception as e:
+        print(f"Gemini API error for cryptic clue: {e}")
+        return jsonify({'error': 'Could not generate cryptic clue.'}), 500
+
+@app.route('/api/player-bio', methods=['POST'])
+def get_player_bio():
+    if not model:
+        return jsonify({'error': 'AI features are not configured.'}), 503
+
+    try:
+        data = request.json
+        player = players_df.iloc[int(data['player_id'])]
+        # Add new fields to the prompt if available
+        prompt = f"""
+You are a knowledgeable and enthusiastic football commentator. Write a short, engaging biography (2-3 sentences) for the following Brighton & Hove Albion footballer based ONLY on the data provided below.
+
+**IMPORTANT: The seasons the player played for Brighton are listed below. YOU MUST include this information in the bio if it is present and the player is not still at the club.**
+
+**Player Data:**
+- Seasons played at Brighton: {player['seasons played at Brighton']}
+- Name: {player['name']}
+- Position: {player['position']}
+- League Appearances for Brighton: {player['Brighton and Hove Albion league appearances']}
+- League Goals for Brighton: {player['Brighton and Hove Albion league goals']}
+- Joined From: {player['Team played for before Brighton and Hove Albion (first spell)']}
+- Left For: {player['Team played for after Brighton and Hove Albion (first spell)']}
+- Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}
+
+**Instructions:**
+1. Focus on their contribution and time at Brighton, and SPECIFICALLY mention the seasons they played for the club (see above).
+2. Do not invent facts, nicknames, or events not present in the data. Do not overestimate thier importance to the club.
+3. Write in a confident and informative tone. Do not say that information is limited or that further research is needed.
+
+"""
+        print(f"DEBUG: Player bio prompt:\n{prompt}")
+        response = model.generate_content(prompt)
+        return jsonify({'bio': response.text})
+    except Exception as e:
+        print(f"Gemini API error for player bio: {e}")
+        return jsonify({'error': 'Could not generate player bio.'}), 500
+
+# --- Frontend Serving Route ---
+@app.route('/')  # Define the route for the main web page
+def serve_index():
+    """Serves the main index.html file from the 'templates' folder."""
+    return render_template('index.html')  # Show the main game page
+
+@app.route('/api/config')
+def get_config():
+    print(f"DEBUG: /api/config called, app.debug={app.debug}")
+    return jsonify({'isLocal': app.debug, 'playerCount': len(players_df)})
+
+if __name__ == '__main__':  # If this file is run directly (not imported)
+    app.run(host='0.0.0.0', port=5002, debug=True)  # Start the Flask web server
