@@ -1,10 +1,11 @@
 import os  # Import the os module for interacting with the operating system
 import pandas as pd  # Import pandas for data handling
-from datetime import datetime  # Import datetime for working with dates
+from datetime import datetime, timedelta  # Import datetime for working with dates
 import google.generativeai as genai
 from flask import Flask, jsonify, request, render_template  # Import Flask and related functions for web server
 import random
 from dotenv import load_dotenv
+import json
 
 # --- Gemini Configuration ---
 # In a real app, you would use a .env file for your API key.
@@ -80,6 +81,32 @@ except Exception as e:
 
 current_player_index = None  # Global override for local testing
 
+# File to store recent player selections
+RECENT_PLAYERS_FILE = 'recent_players.json'
+
+def load_recent_players():
+    """Load the list of recently selected players from file."""
+    try:
+        with open(RECENT_PLAYERS_FILE, 'r') as f:
+            data = json.load(f)
+            # Convert dates back to datetime objects
+            recent_players = {}
+            for date_str, player_id in data.items():
+                recent_players[datetime.fromisoformat(date_str)] = player_id
+            return recent_players
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+def save_recent_players(recent_players):
+    """Save the list of recently selected players to file."""
+    # Convert datetime objects to ISO format strings for JSON serialization
+    data = {}
+    for date, player_id in recent_players.items():
+        data[date.isoformat()] = player_id
+    
+    with open(RECENT_PLAYERS_FILE, 'w') as f:
+        json.dump(data, f)
+
 @app.route('/api/set-player', methods=['POST'])
 def set_player():
     global current_player_index
@@ -94,13 +121,48 @@ def set_player():
         return jsonify({'error': 'Invalid player index'}), 400
 
 def get_daily_player():
+    """Get today's player using a randomized but deterministic selection."""
     global current_player_index
+    
     if app.debug and current_player_index is not None:
         player = players_df.iloc[current_player_index]
-    else:
-        day_of_year = datetime.now().timetuple().tm_yday
-        player_index = (day_of_year - 1) % len(players_df)
-        player = players_df.iloc[player_index]
+        return player
+    
+    today = datetime.now().date()
+    recent_players = load_recent_players()
+    
+    # Clean up old entries (older than 30 days)
+    cutoff_date = today - timedelta(days=30)
+    recent_players = {date: player_id for date, player_id in recent_players.items() 
+                     if date.date() >= cutoff_date}
+    
+    # Get recently used player IDs (last 30 days)
+    recently_used = set(recent_players.values())
+    
+    # Create a seeded random number generator for today
+    # Use a combination of year and day of year for the seed
+    seed = today.year * 1000 + today.timetuple().tm_yday
+    rng = random.Random(seed)
+    
+    # Get all available player indices
+    all_indices = list(range(len(players_df)))
+    
+    # Remove recently used players from the pool
+    available_indices = [idx for idx in all_indices if idx not in recently_used]
+    
+    # If we've used all players recently, reset the pool
+    if not available_indices:
+        available_indices = all_indices
+        recently_used.clear()
+    
+    # Select a random player from available ones
+    selected_index = rng.choice(available_indices)
+    
+    # Record this selection
+    recent_players[datetime.combine(today, datetime.min.time())] = selected_index
+    save_recent_players(recent_players)
+    
+    player = players_df.iloc[selected_index]
     print(f"DEBUG: Selected player: {player.to_dict()}")
     return player
 
@@ -286,6 +348,45 @@ def serve_index():
 def get_config():
     print(f"DEBUG: /api/config called, app.debug={app.debug}")
     return jsonify({'isLocal': app.debug, 'playerCount': len(players_df)})
+
+@app.route('/api/debug/recent-players')
+def debug_recent_players():
+    """Debug endpoint to see recent player selections."""
+    if not app.debug:
+        return jsonify({'error': 'Not allowed in production'}), 403
+    
+    recent_players = load_recent_players()
+    today = datetime.now().date()
+    
+    # Format the data for display
+    recent_data = []
+    for date, player_id in recent_players.items():
+        if date.date() >= today - timedelta(days=30):
+            player = players_df.iloc[player_id]
+            recent_data.append({
+                'date': date.date().isoformat(),
+                'player_id': player_id,
+                'player_name': player['name']
+            })
+    
+    return jsonify({
+        'recent_players': recent_data,
+        'total_players': len(players_df),
+        'recent_count': len(recent_data)
+    })
+
+@app.route('/api/debug/reset-recent')
+def debug_reset_recent():
+    """Debug endpoint to reset recent players (for testing)."""
+    if not app.debug:
+        return jsonify({'error': 'Not allowed in production'}), 403
+    
+    # Clear the recent players file
+    try:
+        os.remove(RECENT_PLAYERS_FILE)
+        return jsonify({'success': True, 'message': 'Recent players reset'})
+    except FileNotFoundError:
+        return jsonify({'success': True, 'message': 'No recent players file to reset'})
 
 if __name__ == '__main__':  # If this file is run directly (not imported)
     app.run(host='0.0.0.0', port=5002, debug=True)  # Start the Flask web server
