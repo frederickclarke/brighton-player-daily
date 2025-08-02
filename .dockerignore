@@ -1,0 +1,11 @@
+# flyctl launch added from .gitignore
+# Environment variables
+**/.env
+
+# Python virtual environment
+**/venv
+
+# flyctl launch added from venv/.gitignore
+# Created by venv; see https://docs.python.org/3/library/venv.html
+venv/**/*
+fly.toml
