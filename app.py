@@ -7,13 +7,13 @@ import random
 from dotenv import load_dotenv
 import json
 
+load_dotenv()
+
 # --- Gemini Configuration ---
-# In a real app, you would use a .env file for your API key.
-# For this guide, we will leave it blank as the execution environment will handle it.
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-1.5-flash')
+    model = genai.GenerativeModel('gemini-2.5-flash-lite')
 else:
     model = None
     print("WARNING: GEMINI_API_KEY is not set. AI features will be disabled.")
