@@ -123,47 +123,55 @@ def set_player():
 def get_daily_player():
     """Get today's player using a randomized but deterministic selection."""
     global current_player_index
-    
+
     if app.debug and current_player_index is not None:
         player = players_df.iloc[current_player_index]
         return player
-    
+
     today = datetime.now().date()
     recent_players = load_recent_players()
-    
+
     # Clean up old entries (older than 30 days)
     cutoff_date = today - timedelta(days=30)
-    recent_players = {date: player_id for date, player_id in recent_players.items() 
+    recent_players = {date: player_id for date, player_id in recent_players.items()
                      if date.date() >= cutoff_date}
-    
+
+    # Check if today's player has already been selected — return it immediately
+    today_key = datetime.combine(today, datetime.min.time())
+    if today_key in recent_players:
+        selected_index = recent_players[today_key]
+        player = players_df.iloc[selected_index]
+        print(f"DEBUG: Returning cached player for today: {player.to_dict()}")
+        return player
+
     # Get recently used player IDs (last 30 days)
     recently_used = set(recent_players.values())
-    
+
     # Create a seeded random number generator for today
     # Use a combination of year and day of year for the seed
     seed = today.year * 1000 + today.timetuple().tm_yday
     rng = random.Random(seed)
-    
+
     # Get all available player indices
     all_indices = list(range(len(players_df)))
-    
+
     # Remove recently used players from the pool
     available_indices = [idx for idx in all_indices if idx not in recently_used]
-    
+
     # If we've used all players recently, reset the pool
     if not available_indices:
         available_indices = all_indices
         recently_used.clear()
-    
+
     # Select a random player from available ones
     selected_index = rng.choice(available_indices)
-    
+
     # Record this selection
-    recent_players[datetime.combine(today, datetime.min.time())] = selected_index
+    recent_players[today_key] = selected_index
     save_recent_players(recent_players)
-    
+
     player = players_df.iloc[selected_index]
-    print(f"DEBUG: Selected player: {player.to_dict()}")
+    print(f"DEBUG: Selected new player for today: {player.to_dict()}")
     return player
 
 def build_clues(player, seed=None):

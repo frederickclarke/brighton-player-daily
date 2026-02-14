@@ -497,7 +497,7 @@
             input.addEventListener('input', (e) => {
                 if (e.target.value.length === 1) {
                     const next = findNextInput(e.target);
-                    if (next) next.focus(); else submitGuessBtn.focus();
+                    if (next) next.focus();
                 }
             });
             input.addEventListener('keydown', (e) => {
