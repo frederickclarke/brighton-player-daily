@@ -139,14 +139,26 @@
         }
 
         .modal-overlay {
+            position: fixed;
+            inset: 0;
             background-color: rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-overlay.hidden {
+            display: none;
         }
 
         .modal-content {
             background-color: #ffffff;
             border-radius: 8px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.1), 0 2px 4px rgba(0,0,0,0.06);
+            max-width: 400px;
+            width: 90%;
         }
 
         .countdown-timer span {
@@ -213,7 +225,22 @@
 
     <main class="flex-grow container mx-auto px-4 py-8">
         <div id="app-container" class="max-w-lg mx-auto">
-            <div id="game-view" class="material-card p-6 space-y-6">
+            <div id="welcome-view" class="material-card p-6 space-y-6 text-center hidden">
+                <div class="flex flex-col items-center gap-2">
+                    <span class="material-icons text-blue-600" style="font-size: 3rem;">sports_soccer</span>
+                    <h2 class="text-2xl font-medium text-blue-700">Welcome Back!</h2>
+                </div>
+                <div id="streak-display" class="py-4">
+                    <p id="streak-value" class="text-4xl font-bold text-amber-500">0 🔥</p>
+                    <p id="streak-label" class="text-gray-600 mt-1">Day Streak</p>
+                </div>
+                <button id="play-btn" class="btn btn-primary w-full text-lg py-4">
+                    <span class="material-icons">play_arrow</span>
+                    Play Today's Challenge
+                </button>
+            </div>
+
+            <div id="game-view" class="material-card p-6 space-y-6 hidden">
                 <div>
                     <p class="text-center text-sm text-gray-600 mb-4">Today's Mystery Player:</p>
                     <div id="player-name-input-area" class="letter-input-container">
@@ -714,7 +741,7 @@
         nextClueBtn.addEventListener('click', handleNextClue);
     
         // --- Start Game ---
-        initializeGame();
+        showWelcomeScreen();
 
         // Add the cryptic clue button to the DOM
         geminiClueBtn = document.getElementById('gemini-clue-btn');
@@ -809,6 +836,49 @@
               });
           });
         }
+
+        // --- Welcome Screen ---
+        async function showWelcomeScreen() {
+            const stats = JSON.parse(localStorage.getItem(STATS_KEY));
+            const today = new Date().toISOString().split('T')[0];
+            const todayGame = stats && stats.games && stats.games.find(game => game.date === today);
+
+            if (todayGame) {
+                // Already played today — fetch challenge to get player name, then show results
+                const challengeData = await fetchDailyChallenge();
+                if (challengeData) {
+                    currentChallenge = challengeData;
+                    const fullName = `${challengeData.firstName} ${challengeData.lastName}`.trim();
+                    const starsEarned = todayGame.stars;
+                    gameEnded = true;
+                    displayResults(starsEarned > 0, fullName, starsEarned, null);
+                }
+                return;
+            }
+
+            // Show welcome view with streak
+            const welcomeView = document.getElementById('welcome-view');
+            const streakValue = document.getElementById('streak-value');
+            const streakLabel = document.getElementById('streak-label');
+            const streak = (stats && stats.currentStreak) || 0;
+
+            if (streak > 0) {
+                streakValue.textContent = `${streak} 🔥`;
+                streakLabel.textContent = streak === 1 ? 'Day Streak' : 'Day Streak';
+            } else {
+                streakValue.textContent = '0 🔥';
+                streakLabel.textContent = 'Start a new streak today!';
+            }
+
+            welcomeView.classList.remove('hidden');
+            gameView.classList.add('hidden');
+            resultsView.classList.add('hidden');
+        }
+
+        document.getElementById('play-btn').addEventListener('click', () => {
+            document.getElementById('welcome-view').classList.add('hidden');
+            initializeGame();
+        });
 
         // --- Stats Management ---
         function initializeStats() {
@@ -956,6 +1026,76 @@
             }
             console.log('updateNextClueButton called. Button disabled:', nextClueBtn.disabled, 'Label:', nextClueBtn.innerHTML || nextClueBtn.textContent);
         }
+
+        // --- Share Results ---
+        const shareModal = document.getElementById('share-modal');
+        const shareTextDisplay = document.getElementById('share-text-display');
+        const copyToClipboardBtn = document.getElementById('copy-to-clipboard-btn');
+        const copyFeedback = document.getElementById('copy-feedback');
+        const closeShareModalBtn = document.getElementById('close-share-modal-btn');
+        const shareResultsBtn = document.getElementById('share-results-btn');
+
+        function getShareText() {
+            const stats = JSON.parse(localStorage.getItem(STATS_KEY));
+            const today = new Date().toISOString().split('T')[0];
+            const todayGame = stats && stats.games && stats.games.find(game => game.date === today);
+            const stars = todayGame ? todayGame.stars : 0;
+            const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+            const starEmojis = '⭐'.repeat(stars) + '☆'.repeat(5 - stars);
+            return `Brighton Player Daily - ${stars}/5 ⭐\n${dateStr}\n${starEmojis}\nhttps://brighton-daily.fly.dev`;
+        }
+
+        function openShareModal() {
+            const text = getShareText();
+            shareTextDisplay.textContent = text;
+            copyFeedback.textContent = '';
+
+            // Update Twitter/X link
+            const twitterLink = shareModal.querySelector('a[class*="1DA1F2"]');
+            if (twitterLink) {
+                twitterLink.href = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}`;
+            }
+
+            // Update WhatsApp link
+            const whatsappLink = shareModal.querySelector('a[class*="25D366"]');
+            if (whatsappLink) {
+                whatsappLink.href = `https://wa.me/?text=${encodeURIComponent(text)}`;
+            }
+
+            shareModal.classList.remove('hidden');
+        }
+
+        shareResultsBtn.addEventListener('click', openShareModal);
+
+        closeShareModalBtn.addEventListener('click', () => {
+            shareModal.classList.add('hidden');
+        });
+
+        shareModal.addEventListener('click', (e) => {
+            if (e.target === shareModal) {
+                shareModal.classList.add('hidden');
+            }
+        });
+
+        copyToClipboardBtn.addEventListener('click', async () => {
+            const text = getShareText();
+            try {
+                await navigator.clipboard.writeText(text);
+                copyFeedback.textContent = 'Copied to clipboard!';
+            } catch (err) {
+                // Fallback for older browsers
+                const textarea = document.createElement('textarea');
+                textarea.value = text;
+                textarea.style.position = 'fixed';
+                textarea.style.opacity = '0';
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+                copyFeedback.textContent = 'Copied to clipboard!';
+            }
+            setTimeout(() => { copyFeedback.textContent = ''; }, 3000);
+        });
     </script>
 </body>
 </html>
