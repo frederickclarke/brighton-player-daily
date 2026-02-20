@@ -10,6 +10,7 @@ import json
 load_dotenv()
 
 # --- Gemini Configuration ---
+ADMIN_KEY = os.environ.get("ADMIN_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -359,9 +360,11 @@ def get_config():
 
 @app.route('/api/debug/recent-players')
 def debug_recent_players():
-    """Debug endpoint to see recent player selections."""
+    """Debug endpoint to see recent player selections. Accessible in production with admin key."""
     if not app.debug:
-        return jsonify({'error': 'Not allowed in production'}), 403
+        provided_key = request.args.get('key')
+        if not ADMIN_KEY or provided_key != ADMIN_KEY:
+            return jsonify({'error': 'Not allowed in production'}), 403
     
     recent_players = load_recent_players()
     today = datetime.now().date()
