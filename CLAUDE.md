@@ -29,7 +29,7 @@ flyctl deploy --depot=false
 
 **Single-file backend:** `app.py` — Flask app that loads `brighton_players.csv` into a pandas DataFrame at startup, serves the SPA, and exposes JSON API routes.
 
-**Single-file frontend:** `templates/index.html` — ~1090 lines of HTML/JS/Tailwind CSS (CDN). All game logic, UI rendering, share modal, and stats (localStorage) live here. No build step.
+**Single-file frontend:** `templates/index.html` — ~1150 lines of HTML/JS/Tailwind CSS (CDN). All game logic, UI rendering, share modal, and stats (localStorage) live here. No build step.
 
 **Data file:** `brighton_players.csv` — ~184 players with 22 columns (name, DOB, position, appearances, goals, transfer history, seasons, spells). This is the single source of truth for all player data.
 
@@ -37,6 +37,7 @@ flyctl deploy --depot=false
 
 - **Daily player selection:** Seeded RNG (`year*1000 + day_of_year`) picks a player deterministically. Selections cached in `recent_players.json` to prevent repeats within 30 days.
 - **Clue system:** `build_clues()` generates clues from player data columns, tagged by fact type to avoid duplicates, shuffled deterministically.
+- **Reveal Letter:** Frontend-only feature — reveals a random unrevealed letter in the player's name at the cost of 1 star. Uses the same `revealedClues` penalty pattern as the cryptic clue. Revealed letters are visually distinct (amber styling) and persist through incorrect guesses.
 - **Gemini AI integration:** Optional — generates cryptic name-wordplay clues and player bios via `gemini-2.5-flash-lite`. Gracefully disabled if `GEMINI_API_KEY` is unset.
 
 ### API Routes

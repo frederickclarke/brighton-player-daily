@@ -111,6 +111,28 @@
             color: #2e7d32;
         }
 
+        .letter-input.revealed {
+            border-color: #ffb300;
+            background-color: #fff8e1;
+            color: #e65100;
+            font-weight: 600;
+        }
+
+        .btn-reveal {
+            background: linear-gradient(135deg, #ffc107, #ff9800);
+            color: #ffffff;
+            font-weight: 500;
+        }
+        .btn-reveal:hover:not(:disabled) {
+            background: linear-gradient(135deg, #ffb300, #fb8c00);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .btn-reveal:disabled {
+            background: #e0e0e0;
+            color: #9e9e9e;
+            cursor: not-allowed;
+        }
+
         @keyframes clue-reveal {
             from { opacity: 0; transform: translateY(-8px); }
             to { opacity: 1; transform: translateY(0); }
@@ -271,14 +293,19 @@
                     <span class="material-icons">lightbulb</span>
                     Get Cryptic Clue (Lose 2 ⭐)
                 </button>
-                <div id="game-buttons" class="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
+                <div id="game-buttons" class="space-y-3 mt-2">
                     <button id="submit-guess-btn" class="btn btn-primary w-full">
                         <span class="material-icons">check</span>
                         Submit Guess
                     </button>
-                    <button id="next-clue-btn" class="btn btn-secondary w-full flex items-center justify-center whitespace-nowrap gap-2" disabled>
-                        <span class="material-icons">arrow_forward</span> Next Clue (4 <span class="star">⭐</span>)
-                    </button>
+                    <div class="grid grid-cols-2 gap-4">
+                        <button id="reveal-letter-btn" class="btn btn-reveal w-full flex items-center justify-center whitespace-nowrap gap-2" disabled>
+                            <span class="material-icons">lightbulb</span> Reveal Letter (-1 ⭐)
+                        </button>
+                        <button id="next-clue-btn" class="btn btn-secondary w-full flex items-center justify-center whitespace-nowrap gap-2" disabled>
+                            <span class="material-icons">arrow_forward</span> Next Clue (4 <span class="star">⭐</span>)
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -474,7 +501,8 @@
         let geminiClueUsed = false;
         let crypticClueText = '';
         let revealedClues = [];
-        
+        let revealedLetterPositions = []; // indices into letterInputs[] for revealed letters
+
         // --- API Communication ---
         // No base URL needed when frontend and backend are served from the same origin
         const API_BASE_URL = '';
@@ -615,7 +643,63 @@
             });
             return { guessedFirstName: f, guessedLastName: l };
         }
-        
+
+        function getFullNameLetters() {
+            const first = currentChallenge.firstName || '';
+            const last = currentChallenge.lastName || '';
+            return (first + last).split('');
+        }
+
+        function revealRandomLetter() {
+            if (gameEnded) return;
+            const currentStars = Math.max(6 - revealedClues.length, 1);
+            if (currentStars <= 1) {
+                showFeedback("Not enough stars to reveal a letter!", "error");
+                return;
+            }
+
+            const fullLetters = getFullNameLetters();
+            const unrevealed = [];
+            letterInputs.forEach((input, i) => {
+                if (revealedLetterPositions.includes(i)) return;
+                if (input.value.toLowerCase() === fullLetters[i].toLowerCase()) return;
+                unrevealed.push(i);
+            });
+
+            if (unrevealed.length === 0) {
+                showFeedback("All letters are already filled!", "error");
+                return;
+            }
+
+            const pos = unrevealed[Math.floor(Math.random() * unrevealed.length)];
+            letterInputs[pos].value = fullLetters[pos].toUpperCase();
+            letterInputs[pos].classList.add('revealed');
+            letterInputs[pos].readOnly = true;
+            revealedLetterPositions.push(pos);
+
+            revealedClues.push("Letter reveal penalty");
+            updateStarPotential();
+            updateRevealButton();
+            updateNextClueButton();
+        }
+
+        function updateRevealButton() {
+            const revealBtn = document.getElementById('reveal-letter-btn');
+            if (!revealBtn) return;
+            const currentStars = Math.max(6 - revealedClues.length, 1);
+            const fullLetters = getFullNameLetters();
+            const hasUnrevealed = letterInputs.some((input, i) =>
+                !revealedLetterPositions.includes(i) &&
+                input.value.toLowerCase() !== fullLetters[i].toLowerCase()
+            );
+
+            if (currentStars <= 1 || gameEnded || !hasUnrevealed) {
+                revealBtn.disabled = true;
+            } else {
+                revealBtn.disabled = false;
+            }
+        }
+
         function updateStarPotential() {
             // 5 stars for 1 clue, 4 for 2 clues, ..., 1 for 5 clues
             const stars = Math.max(6 - revealedClues.length, 1);
@@ -641,8 +725,11 @@
         
         function incorrectGuess() {
             showFeedback("Incorrect Guess. Try again or get the next clue.", "error");
-            letterInputs.forEach(input => input.value = '');
-            if (letterInputs.length > 0) letterInputs[0].focus();
+            letterInputs.forEach(input => {
+                if (!input.classList.contains('revealed')) input.value = '';
+            });
+            const firstEditable = letterInputs.find(input => !input.classList.contains('revealed'));
+            if (firstEditable) firstEditable.focus();
         }
     
         function displayResults(isSuccess, fullName, starsEarned = null, cluesUsed = null) {
@@ -706,8 +793,10 @@
                 hintEl.textContent = `${challengeData.firstNameLength} letters`;
             }
             hintEl.classList.remove('hidden');
+            revealedLetterPositions = [];
             updateStarPotential();
             updateNextClueButton();
+            updateRevealButton();
             nextClueBtn.disabled = false;
             console.log('Game initialized, Next Clue button enabled.');
             gameView.classList.remove('hidden');
@@ -740,6 +829,7 @@
                 renderCluesList();
                 updateStarPotential();
                 updateNextClueButton();
+                updateRevealButton();
                 if (currentClueIndex === 2 && !geminiClueUsed) {
                     geminiClueBtn.classList.remove('hidden');
                 }
@@ -766,6 +856,7 @@
         // --- Event Listeners ---
         submitGuessBtn.addEventListener('click', handleGuess);
         nextClueBtn.addEventListener('click', handleNextClue);
+        document.getElementById('reveal-letter-btn').addEventListener('click', revealRandomLetter);
     
         // --- Start Game ---
         showWelcomeScreen();
@@ -794,6 +885,7 @@
                         geminiClueUsed = true;
                         updateStarPotential();
                         updateNextClueButton();
+                        updateRevealButton();
                         geminiClueBtn.classList.add('hidden');
                     } else {
                         clueTextEl.textContent = data.error || 'Could not get cryptic clue.';
@@ -1036,8 +1128,8 @@
         function renderCluesList() {
             const cluesListEl = document.getElementById('clues-list');
             cluesListEl.innerHTML = '';
-            // Filter out the dummy clue
-            const visibleClues = revealedClues.filter(clue => clue !== 'Gemini penalty (used cryptic clue)');
+            // Filter out dummy penalty entries
+            const visibleClues = revealedClues.filter(clue => clue !== 'Gemini penalty (used cryptic clue)' && clue !== 'Letter reveal penalty');
             visibleClues.forEach((clue, idx) => {
                 const clueDiv = document.createElement('div');
                 const isNewest = idx === visibleClues.length - 1 && visibleClues.length > 1;
@@ -1049,12 +1141,12 @@
 
         function updateNextClueButton() {
             if (!nextClueBtn) return;
-            const visibleClues = revealedClues.filter(clue => clue !== 'Gemini penalty (used cryptic clue)');
-            let nextStars = Math.max(5 - visibleClues.length, 1);
-            // If all 5 clues are revealed, or if cryptic clue used and playing for 1 star, show Give Up
-            if (visibleClues.length >= 5 || (nextStars === 1 && revealedClues.some(clue => clue.startsWith('Cryptic Clue:')))) {
+            const currentStars = Math.max(6 - revealedClues.length, 1);
+            // Show "Give Up" when at 1 star or all 5 clue slots used
+            if (currentStars === 1 || currentClueIndex >= 4) {
                 nextClueBtn.textContent = "Give Up";
             } else {
+                const nextStars = Math.max(currentStars - 1, 1);
                 nextClueBtn.innerHTML = `<span class=\"material-icons\">arrow_forward</span> Next Clue (${nextStars} <span class=\"star\">⭐</span>)`;
             }
             console.log('updateNextClueButton called. Button disabled:', nextClueBtn.disabled, 'Label:', nextClueBtn.innerHTML || nextClueBtn.textContent);
@@ -1075,7 +1167,9 @@
             const stars = todayGame ? todayGame.stars : 0;
             const dateStr = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
             const starEmojis = '⭐'.repeat(stars) + '☆'.repeat(5 - stars);
-            return `Brighton Player Daily - ${stars}/5 ⭐\n${dateStr}\n${starEmojis}\nhttps://brighton-daily.fly.dev`;
+            const revealCount = revealedLetterPositions.length;
+            const revealText = revealCount > 0 ? ` (${revealCount}💡)` : '';
+            return `Brighton Player Daily - ${stars}/5 ⭐${revealText}\n${dateStr}\n${starEmojis}\nhttps://brighton-daily.fly.dev`;
         }
 
         function openShareModal() {
