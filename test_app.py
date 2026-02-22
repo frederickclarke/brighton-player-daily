@@ -224,7 +224,7 @@ class TestBuildClues:
         for idx in range(min(20, len(app_module.players_df))):
             player = app_module.players_df.iloc[idx]
             clues = app_module.build_clues(player, seed=42)
-            assert 4 <= len(clues) <= 7, (
+            assert 4 <= len(clues) <= 9, (
                 f"Player {player['name']} has {len(clues)} clues"
             )
 

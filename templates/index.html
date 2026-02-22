@@ -111,6 +111,14 @@
             color: #2e7d32;
         }
 
+        @keyframes clue-reveal {
+            from { opacity: 0; transform: translateY(-8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .clue-new {
+            animation: clue-reveal 0.3s ease-out;
+        }
+
         .header {
             background-color: #1976d2;
             color: #ffffff;
@@ -242,7 +250,8 @@
 
             <div id="game-view" class="material-card p-6 space-y-6 hidden">
                 <div>
-                    <p class="text-center text-sm text-gray-600 mb-4">Today's Mystery Player:</p>
+                    <p class="text-center text-sm text-gray-600 mb-1">Today's Mystery Player:</p>
+                    <p id="name-length-hint" class="text-center text-xs text-gray-400 mb-3 hidden"></p>
                     <div id="player-name-input-area" class="letter-input-container">
                         <!-- This will be populated by JavaScript -->
                     </div>
@@ -362,9 +371,15 @@
                         <p class="stats-label">Games Played</p>
                     </div>
                 </div>
-                <div class="stats-card">
-                    <p class="stats-value" id="current-streak-stat">0 🔥</p>
-                    <p class="stats-label">Current Streak</p>
+                <div class="grid grid-cols-2 gap-4">
+                    <div class="stats-card">
+                        <p class="stats-value" id="current-streak-stat">0 🔥</p>
+                        <p class="stats-label">Current Streak</p>
+                    </div>
+                    <div class="stats-card">
+                        <p class="stats-value" id="longest-streak-stat">0 🔥</p>
+                        <p class="stats-label">Best Streak</p>
+                    </div>
                 </div>
                 <button id="back-to-game-btn-stats" class="btn btn-secondary w-full mt-6">
                     <span class="material-icons">arrow_back</span>
@@ -607,8 +622,13 @@
             starPotentialEl.innerHTML = `${stars} <span class="star">⭐</span>`;
         }
     
+        let feedbackTimer = null;
         function showFeedback(message, type, autoClear = true) {
+            if (feedbackTimer) clearTimeout(feedbackTimer);
             feedbackMessageEl.textContent = message;
+            if (autoClear) {
+                feedbackTimer = setTimeout(() => { feedbackMessageEl.textContent = ''; }, 3000);
+            }
         }
         
         function correctGuess(fullName) {
@@ -679,6 +699,13 @@
             revealedClues = [challengeData.firstClue];
             renderCluesList();
             generateNameInputs(challengeData.firstNameLength, challengeData.lastNameLength);
+            const hintEl = document.getElementById('name-length-hint');
+            if (challengeData.lastNameLength > 0) {
+                hintEl.textContent = `${challengeData.firstNameLength} letters, ${challengeData.lastNameLength} letters`;
+            } else {
+                hintEl.textContent = `${challengeData.firstNameLength} letters`;
+            }
+            hintEl.classList.remove('hidden');
             updateStarPotential();
             updateNextClueButton();
             nextClueBtn.disabled = false;
@@ -887,6 +914,7 @@
                 const initialStats = {
                     games: [],
                     currentStreak: 0,
+                    longestStreak: 0,
                     totalStars: 0,
                     gamesPlayed: 0,
                     starDistribution: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 }
@@ -943,6 +971,9 @@
             }
             
             stats.currentStreak = streak;
+            if (!stats.longestStreak || streak > stats.longestStreak) {
+                stats.longestStreak = streak;
+            }
             localStorage.setItem(STATS_KEY, JSON.stringify(stats));
         }
 
@@ -962,6 +993,7 @@
             document.getElementById('total-stars-stat').textContent = `${stats.totalStars} ⭐`;
             document.getElementById('games-played-stat').textContent = stats.gamesPlayed;
             document.getElementById('current-streak-stat').textContent = `${stats.currentStreak} 🔥`;
+            document.getElementById('longest-streak-stat').textContent = `${stats.longestStreak || 0} 🔥`;
         }
 
         // --- Event Listeners ---
@@ -1008,7 +1040,8 @@
             const visibleClues = revealedClues.filter(clue => clue !== 'Gemini penalty (used cryptic clue)');
             visibleClues.forEach((clue, idx) => {
                 const clueDiv = document.createElement('div');
-                clueDiv.className = 'mb-2';
+                const isNewest = idx === visibleClues.length - 1 && visibleClues.length > 1;
+                clueDiv.className = 'mb-2' + (isNewest ? ' clue-new' : '');
                 clueDiv.innerHTML = `<span class="font-semibold text-sky-700">Clue ${idx + 1}/5:</span> <span class="text-sky-800">${clue}</span>`;
                 cluesListEl.appendChild(clueDiv);
             });

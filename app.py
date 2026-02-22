@@ -175,10 +175,24 @@ def get_daily_player():
     print(f"DEBUG: Selected new player for today: {player.to_dict()}")
     return player
 
+def _extract_era(seasons_str):
+    """Extract decade(s) from a seasons string like '2010-2015, 2018-2020' → 'the 2010s'."""
+    if not seasons_str:
+        return ""
+    import re
+    years = re.findall(r'(\d{4})', str(seasons_str))
+    if not years:
+        return ""
+    decades = sorted(set(int(y) // 10 * 10 for y in years))
+    if len(decades) == 1:
+        return f"the {decades[0]}s"
+    return f"the {decades[0]}s and {decades[-1]}s"
+
 def build_clues(player, seed=None):
     """
     Build a list of clues for a player, avoiding clues that repeat the same facts.
     Each clue is tagged with the facts it uses. Only one clue per fact is included.
+    Clues are organised into difficulty tiers (hard → easy) for a consistent challenge curve.
     """
     facts_used = set()
     clues = []
@@ -193,24 +207,52 @@ def build_clues(player, seed=None):
             left_for_clue = f"This player left Brighton to join {left_for_value}"
     else:
         left_for_clue = ""
-    # Define clues with their fact tags (as sets)
-    clue_defs = [
-        (f"This player was born on {player['date of birth']}, in {player['place of birth']}, {player['country of birth']}.", {'birth'}),
-        (f"This player made {player['Brighton and Hove Albion league appearances']} league appearances for Brighton.", {'appearances'}),
-        (f"This player joined Brighton from {player['Team played for before Brighton and Hove Albion (first spell)']}", {'joined_from'}),
-        (left_for_clue, {'left_for'}),
-        (f"This player is a {player['position']}.", {'position'}),
+
+    # Era clue derived from seasons
+    era = _extract_era(player['seasons played at Brighton'])
+    era_clue = f"This player played for Brighton during {era}." if era else ""
+
+    # Goals clue
+    goals = player['Brighton and Hove Albion league goals']
+    goals_clue = f"This player scored {goals} league goals for Brighton." if pd.notna(goals) else ""
+
+    # Define clues in difficulty tiers (hard → medium → easy)
+    # Tier 1 (Hard/vague): broad facts that apply to many players
+    tier_1 = [
+        (era_clue, {'era'}),
         (f"This player was born in {player['place of birth']}, {player['country of birth']} and has {player['number of spells at Brighton and Hove Albion']} spell(s) at Brighton.", {'birth', 'spells'}),
         (f"Seasons played at Brighton: {player['seasons played at Brighton']}" if player['seasons played at Brighton'] else "", {'seasons'}),
         (f"Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}" if player['seasons at brighton during second spell'] else "", {'seasons2'}),
     ]
-    # Remove empty clues
-    clue_defs = [(clue, tags) for clue, tags in clue_defs if clue.strip()]
-    # Shuffle clues deterministically
+    # Tier 2 (Medium): narrows the field considerably
+    tier_2 = [
+        (f"This player made {player['Brighton and Hove Albion league appearances']} league appearances for Brighton.", {'appearances'}),
+        (goals_clue, {'goals'}),
+        (f"This player joined Brighton from {player['Team played for before Brighton and Hove Albion (first spell)']}", {'joined_from'}),
+        (left_for_clue, {'left_for'}),
+    ]
+    # Tier 3 (Easy/most revealing): strongly identifies the player
+    tier_3 = [
+        (f"This player is a {player['position']}.", {'position'}),
+        (f"This player was born on {player['date of birth']}, in {player['place of birth']}, {player['country of birth']}.", {'birth'}),
+    ]
+
+    # Remove empty clues from each tier
+    tier_1 = [(c, t) for c, t in tier_1 if c.strip()]
+    tier_2 = [(c, t) for c, t in tier_2 if c.strip()]
+    tier_3 = [(c, t) for c, t in tier_3 if c.strip()]
+
+    # Shuffle within each tier deterministically
     if seed is None:
         seed = str(datetime.now().date()) + str(player.name)
     rng = random.Random(seed)
-    rng.shuffle(clue_defs)
+    rng.shuffle(tier_1)
+    rng.shuffle(tier_2)
+    rng.shuffle(tier_3)
+
+    # Present tiers in order: hard first, easy last
+    clue_defs = tier_1 + tier_2 + tier_3
+
     for clue, tags in clue_defs:
         if not tags & facts_used:  # Only add if none of the tags have been used
             clues.append(clue)
