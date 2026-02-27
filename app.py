@@ -153,8 +153,9 @@ def get_daily_player():
     seed = today.year * 1000 + today.timetuple().tm_yday
     rng = random.Random(seed)
 
-    # Get all available player indices
-    all_indices = list(range(len(players_df)))
+    # Get all player indices that have at least 1 league appearance
+    all_indices = [idx for idx in range(len(players_df))
+                   if players_df.iloc[idx]['Brighton and Hove Albion league appearances'] > 0]
 
     # Remove recently used players from the pool
     available_indices = [idx for idx in all_indices if idx not in recently_used]
@@ -218,10 +219,11 @@ def build_clues(player, seed=None):
 
     # Define clues in difficulty tiers (hard → medium → easy)
     # Tier 1 (Hard/vague): broad facts that apply to many players
+    # Only include the era clue if there's no specific seasons data (era is redundant when seasons is shown)
     tier_1 = [
-        (era_clue, {'era'}),
+        (era_clue if not player['seasons played at Brighton'] else "", {'era'}),
         (f"This player was born in {player['place of birth']}, {player['country of birth']} and has {player['number of spells at Brighton and Hove Albion']} spell(s) at Brighton.", {'birth', 'spells'}),
-        (f"Seasons played at Brighton: {player['seasons played at Brighton']}" if player['seasons played at Brighton'] else "", {'seasons'}),
+        (f"Seasons at Brighton: {player['seasons played at Brighton']}" if player['seasons played at Brighton'] else "", {'seasons'}),
         (f"Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}" if player['seasons at brighton during second spell'] else "", {'seasons2'}),
     ]
     # Tier 2 (Medium): narrows the field considerably
@@ -303,9 +305,12 @@ def check_guess():
         guess_first = data.get('guess_first', '').lower()  # Get the guessed first name (lowercase)
         guess_last = data.get('guess_last', '').lower()  # Get the guessed last name (lowercase)
         player = players_df.iloc[int(player_id)]  # Get the player's data
+        # Normalize smart quotes/curly apostrophes to straight ones for comparison
+        def normalize(s):
+            return s.replace('\u2019', "'").replace('\u2018', "'").replace('\u201c', '"').replace('\u201d', '"')
         # Check if the guess matches the player's name
-        is_correct = (guess_first == player['first name'].lower() and
-                      guess_last == player['last name'].lower())
+        is_correct = (normalize(guess_first) == normalize(player['first name'].lower()) and
+                      normalize(guess_last) == normalize(player['last name'].lower()))
         response = {'correct': is_correct}  # Prepare the response
         if is_correct:
             # If correct, include the full name

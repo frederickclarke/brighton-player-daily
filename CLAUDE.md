@@ -66,6 +66,13 @@ Fly.io (`fly.toml`): app `brighton-daily`, region `lhr`, port 8080, auto-scales 
 
 **GitHub sync rule:** After every successful deploy to Fly.io, commit and push all deployed changes to `main` so the GitHub repo always reflects what is running in production.
 
+### Testing Policy
+
+- **Run tests before every deployment:** `pytest test_app.py -v` must pass with 0 failures.
+- **Review test coverage with every change:** After implementing any feature or bug fix, review the existing test suite and add new tests to cover the changed behaviour. This includes backend logic changes (clue generation, player selection, guess validation) and any new API behaviour.
+- **Test categories:** Data integrity, split_name, build_clues, recent players, get_daily_player, API routes, debug endpoints, Gemini routes, special character handling, clue logic, player selection filter.
+- **What to test:** New backend logic, edge cases for special characters in player names, clue deduplication rules, and player selection filters. Frontend-only changes (CSS, localStorage) don't need backend tests but should be manually verified before deploy.
+
 ###  Session Management
 - **Naming Rule:** At the start of every new task or significant pivot, proactively rename the current session using the `/rename` command.
 - **Format:** Use `[Project-Name]: [Brief-Task-Description]` (e.g., `Brighton: CSV-Audit` or `Brighton: Fly-Deploy-Fix`).

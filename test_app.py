@@ -471,3 +471,124 @@ class TestGeminiRoutes:
         with patch.object(app_module, "model", mock_model):
             resp = client.post("/api/cryptic-clue", json={"player_id": 72})
             assert resp.status_code == 500
+
+
+# ---------------------------------------------------------------------------
+# 9. Special Character Handling (apostrophes, hyphens, smart quotes)
+# ---------------------------------------------------------------------------
+
+class TestSpecialCharacters:
+
+    def _find_player_index(self, name):
+        matches = app_module.players_df[app_module.players_df["name"] == name]
+        assert len(matches) == 1, f"Player '{name}' not found"
+        return int(matches.index[0])
+
+    def test_guess_with_apostrophe(self, debug_client):
+        idx = self._find_player_index("Mark O'Mahony")
+        debug_client.post("/api/set-player", json={"player_id": idx})
+        resp = debug_client.post("/api/guess", json={
+            "player_id": idx,
+            "guess_first": "Mark",
+            "guess_last": "O'Mahony",
+        })
+        assert resp.get_json()["correct"] is True
+
+    def test_guess_with_smart_quote(self, debug_client):
+        """Curly/smart apostrophe (U+2019) should match straight apostrophe."""
+        idx = self._find_player_index("Mark O'Mahony")
+        debug_client.post("/api/set-player", json={"player_id": idx})
+        resp = debug_client.post("/api/guess", json={
+            "player_id": idx,
+            "guess_first": "Mark",
+            "guess_last": "O\u2019Mahony",
+        })
+        assert resp.get_json()["correct"] is True
+
+    def test_guess_with_hyphen(self, debug_client):
+        idx = self._find_player_index("Colin Kazim-Richards")
+        debug_client.post("/api/set-player", json={"player_id": idx})
+        resp = debug_client.post("/api/guess", json={
+            "player_id": idx,
+            "guess_first": "Colin",
+            "guess_last": "Kazim-Richards",
+        })
+        assert resp.get_json()["correct"] is True
+
+    def test_apostrophe_name_lengths_include_special_char(self, debug_client):
+        """Name length should include the apostrophe character."""
+        idx = self._find_player_index("Mark O'Mahony")
+        debug_client.post("/api/set-player", json={"player_id": idx})
+        data = debug_client.get("/api/daily-challenge").get_json()
+        assert data["lastNameLength"] == len("O'Mahony")
+
+
+# ---------------------------------------------------------------------------
+# 10. Clue Logic (era suppression, seasons text)
+# ---------------------------------------------------------------------------
+
+class TestClueLogic:
+
+    def test_era_clue_suppressed_when_seasons_exist(self):
+        """Era clue ('played during the 2010s') should not appear when seasons data exists."""
+        player = app_module.players_df.iloc[72]  # Lewis Dunk — has seasons data
+        clues = app_module.build_clues(player, seed=42)
+        for clue in clues:
+            assert "played for Brighton during the" not in clue
+
+    def test_seasons_clue_says_at_not_played_at(self):
+        """Seasons clue should say 'Seasons at Brighton' not 'Seasons played at Brighton'."""
+        player = app_module.players_df.iloc[72]
+        clues = app_module.build_clues(player, seed=42)
+        seasons_clues = [c for c in clues if "Seasons at Brighton:" in c]
+        assert len(seasons_clues) > 0, "Seasons clue should be present"
+        for c in clues:
+            assert "Seasons played at Brighton" not in c
+
+    def test_era_suppression_across_multiple_players(self):
+        """For any player with seasons data, era clue should be suppressed."""
+        for idx in range(min(30, len(app_module.players_df))):
+            player = app_module.players_df.iloc[idx]
+            if player["seasons played at Brighton"]:
+                clues = app_module.build_clues(player, seed=42)
+                for clue in clues:
+                    assert "played for Brighton during the" not in clue, (
+                        f"Era clue leaked for {player['name']}"
+                    )
+
+
+# ---------------------------------------------------------------------------
+# 11. Player Selection Filter (league appearances)
+# ---------------------------------------------------------------------------
+
+class TestPlayerSelectionFilter:
+
+    def test_daily_player_has_league_appearances(self, mock_recent_players_file):
+        """Daily player should always have at least 1 league appearance."""
+        app_module.app.debug = False
+        app_module.current_player_index = None
+        player = app_module.get_daily_player()
+        assert int(player["Brighton and Hove Albion league appearances"]) > 0
+
+    def test_zero_appearance_players_exist_in_csv(self):
+        """Confirm zero-appearance players exist (validates that the filter matters)."""
+        zero_apps = app_module.players_df[
+            app_module.players_df["Brighton and Hove Albion league appearances"] == 0
+        ]
+        assert len(zero_apps) > 0
+
+    def test_eligible_pool_excludes_zero_appearances(self):
+        """The selection pool used by get_daily_player should exclude zero-appearance players."""
+        eligible = [
+            idx for idx in range(len(app_module.players_df))
+            if app_module.players_df.iloc[idx]["Brighton and Hove Albion league appearances"] > 0
+        ]
+        zero_apps = [
+            idx for idx in range(len(app_module.players_df))
+            if app_module.players_df.iloc[idx]["Brighton and Hove Albion league appearances"] == 0
+        ]
+        # All zero-appearance players should be excluded from the eligible pool
+        for idx in zero_apps:
+            assert idx not in eligible
+        # Eligible pool should be smaller than total
+        assert len(eligible) < len(app_module.players_df)

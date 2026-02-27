@@ -118,6 +118,14 @@
             font-weight: 600;
         }
 
+        .letter-input.prefilled {
+            border-color: #bdbdbd;
+            background-color: #eeeeee;
+            color: #616161;
+            font-weight: 600;
+            cursor: default;
+        }
+
         .btn-reveal {
             background: linear-gradient(135deg, #ffc107, #ff9800);
             color: #ffffff;
@@ -298,12 +306,12 @@
                         <span class="material-icons">check</span>
                         Submit Guess
                     </button>
-                    <div class="grid grid-cols-2 gap-4">
-                        <button id="reveal-letter-btn" class="btn btn-reveal w-full flex items-center justify-center whitespace-nowrap gap-2" disabled>
-                            <span class="material-icons">lightbulb</span> Reveal Letter (-1 ⭐)
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="reveal-letter-btn" class="btn btn-reveal w-full flex items-center justify-center gap-1 text-sm px-2 py-3" disabled>
+                            <span class="material-icons" style="font-size:18px">lightbulb</span> Reveal Letter (-1 ⭐)
                         </button>
-                        <button id="next-clue-btn" class="btn btn-secondary w-full flex items-center justify-center whitespace-nowrap gap-2" disabled>
-                            <span class="material-icons">arrow_forward</span> Next Clue (4 <span class="star">⭐</span>)
+                        <button id="next-clue-btn" class="btn btn-secondary w-full flex items-center justify-center gap-1 text-sm px-2 py-3" disabled>
+                            <span class="material-icons" style="font-size:18px">arrow_forward</span> Next Clue (4 <span class="star">⭐</span>)
                         </button>
                     </div>
                 </div>
@@ -458,6 +466,7 @@
 
     <script>
         const STATS_KEY = 'brighton_player_daily_stats';
+        const GAME_STATE_KEY = 'brighton_player_daily_game_state';
 
         initializeStats();
         let isLocal = false;
@@ -502,6 +511,93 @@
         let crypticClueText = '';
         let revealedClues = [];
         let revealedLetterPositions = []; // indices into letterInputs[] for revealed letters
+
+        // --- Game State Persistence ---
+        function saveGameState() {
+            const letterValues = letterInputs.map(input => input.value);
+            const state = {
+                date: new Date().toISOString().split('T')[0],
+                currentChallenge,
+                currentClueIndex,
+                revealedClues,
+                revealedLetterPositions,
+                geminiClueUsed,
+                crypticClueText,
+                letterValues
+            };
+            localStorage.setItem(GAME_STATE_KEY, JSON.stringify(state));
+        }
+
+        function loadGameState() {
+            try {
+                const saved = localStorage.getItem(GAME_STATE_KEY);
+                if (!saved) return null;
+                const state = JSON.parse(saved);
+                const today = new Date().toISOString().split('T')[0];
+                if (state.date !== today) {
+                    localStorage.removeItem(GAME_STATE_KEY);
+                    return null;
+                }
+                return state;
+            } catch { return null; }
+        }
+
+        function clearGameState() {
+            localStorage.removeItem(GAME_STATE_KEY);
+        }
+
+        function restoreGame(state) {
+            currentChallenge = state.currentChallenge;
+            currentClueIndex = state.currentClueIndex;
+            revealedClues = state.revealedClues;
+            revealedLetterPositions = state.revealedLetterPositions || [];
+            geminiClueUsed = state.geminiClueUsed;
+            crypticClueText = state.crypticClueText;
+            gameEnded = false;
+
+            generateNameInputs(currentChallenge.firstNameLength, currentChallenge.lastNameLength);
+
+            // Restore typed letters (after generateNameInputs which handles prefilled chars)
+            if (state.letterValues) {
+                state.letterValues.forEach((val, i) => {
+                    if (i < letterInputs.length && val && !letterInputs[i].classList.contains('prefilled')) {
+                        letterInputs[i].value = val;
+                    }
+                });
+            }
+
+            // Restore revealed letter styling
+            revealedLetterPositions.forEach(pos => {
+                if (pos < letterInputs.length) {
+                    letterInputs[pos].classList.add('revealed');
+                    letterInputs[pos].readOnly = true;
+                }
+            });
+
+            const hintEl = document.getElementById('name-length-hint');
+            if (currentChallenge.lastNameLength > 0) {
+                hintEl.textContent = `${currentChallenge.firstNameLength} letters, ${currentChallenge.lastNameLength} letters`;
+            } else {
+                hintEl.textContent = `${currentChallenge.firstNameLength} letters`;
+            }
+            hintEl.classList.remove('hidden');
+
+            renderCluesList();
+            updateStarPotential();
+            updateNextClueButton();
+            updateRevealButton();
+
+            gameView.classList.remove('hidden');
+            resultsView.classList.add('hidden');
+            submitGuessBtn.disabled = false;
+            nextClueBtn.disabled = false;
+
+            if (geminiClueUsed) {
+                geminiClueBtn.classList.add('hidden');
+            } else if (currentClueIndex >= 2) {
+                geminiClueBtn.classList.remove('hidden');
+            }
+        }
 
         // --- API Communication ---
         // No base URL needed when frontend and backend are served from the same origin
@@ -632,6 +728,17 @@
             if (totalLetters > 17) {
                 groupsRow.classList.add('stacked');
             }
+
+            // Pre-fill special characters (apostrophes, hyphens) as read-only
+            const fullName = (currentChallenge.firstName || '') + (currentChallenge.lastName || '');
+            letterInputs.forEach((input, i) => {
+                const char = fullName[i];
+                if (char && !/[a-zA-Z]/i.test(char)) {
+                    input.value = char;
+                    input.readOnly = true;
+                    input.classList.add('prefilled');
+                }
+            });
         }
         
         function getGuessedName() {
@@ -662,6 +769,7 @@
             const unrevealed = [];
             letterInputs.forEach((input, i) => {
                 if (revealedLetterPositions.includes(i)) return;
+                if (input.classList.contains('prefilled')) return;
                 if (input.value.toLowerCase() === fullLetters[i].toLowerCase()) return;
                 unrevealed.push(i);
             });
@@ -681,6 +789,7 @@
             updateStarPotential();
             updateRevealButton();
             updateNextClueButton();
+            saveGameState();
         }
 
         function updateRevealButton() {
@@ -690,6 +799,7 @@
             const fullLetters = getFullNameLetters();
             const hasUnrevealed = letterInputs.some((input, i) =>
                 !revealedLetterPositions.includes(i) &&
+                !input.classList.contains('prefilled') &&
                 input.value.toLowerCase() !== fullLetters[i].toLowerCase()
             );
 
@@ -717,6 +827,7 @@
         
         function correctGuess(fullName) {
             gameEnded = true;
+            clearGameState();
             const starsEarned = Math.max(6 - revealedClues.length, 1);
             saveGameResult(starsEarned, isLocal);
             showFeedback(`Correct! It was ${fullName}`, "success", false);
@@ -726,9 +837,9 @@
         function incorrectGuess() {
             showFeedback("Incorrect Guess. Try again or get the next clue.", "error");
             letterInputs.forEach(input => {
-                if (!input.classList.contains('revealed')) input.value = '';
+                if (!input.classList.contains('revealed') && !input.classList.contains('prefilled')) input.value = '';
             });
-            const firstEditable = letterInputs.find(input => !input.classList.contains('revealed'));
+            const firstEditable = letterInputs.find(input => !input.classList.contains('revealed') && !input.classList.contains('prefilled'));
             if (firstEditable) firstEditable.focus();
         }
     
@@ -802,6 +913,7 @@
             gameView.classList.remove('hidden');
             resultsView.classList.add('hidden');
             submitGuessBtn.disabled = false;
+            saveGameState();
         }
     
         async function handleNextClue() {
@@ -811,6 +923,7 @@
             // If only 1 star left, treat as "Give Up"
             if (currentStars === 1) {
                 gameEnded = true;
+                clearGameState();
                 const fullName = (currentChallenge.firstName && currentChallenge.lastName)
                     ? `${currentChallenge.firstName} ${currentChallenge.lastName}`.trim()
                     : "Unknown Player";
@@ -830,6 +943,7 @@
                 updateStarPotential();
                 updateNextClueButton();
                 updateRevealButton();
+                saveGameState();
                 if (currentClueIndex === 2 && !geminiClueUsed) {
                     geminiClueBtn.classList.remove('hidden');
                 }
@@ -886,6 +1000,7 @@
                         updateStarPotential();
                         updateNextClueButton();
                         updateRevealButton();
+                        saveGameState();
                         geminiClueBtn.classList.add('hidden');
                     } else {
                         clueTextEl.textContent = data.error || 'Could not get cryptic clue.';
@@ -948,6 +1063,7 @@
             }).then(res => res.json())
               .then(data => {
                 if (data.success) {
+                  clearGameState();
                   window.location.reload();
                 } else {
                   alert('Failed to change player');
@@ -964,6 +1080,7 @@
 
             if (todayGame) {
                 // Already played today — fetch challenge to get player name, then show results
+                clearGameState();
                 const challengeData = await fetchDailyChallenge();
                 if (challengeData) {
                     currentChallenge = challengeData;
@@ -972,6 +1089,13 @@
                     gameEnded = true;
                     displayResults(starsEarned > 0, fullName, starsEarned, null);
                 }
+                return;
+            }
+
+            // Check for saved in-progress game state
+            const savedState = loadGameState();
+            if (savedState) {
+                restoreGame(savedState);
                 return;
             }
 

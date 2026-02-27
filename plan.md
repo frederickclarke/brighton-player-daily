@@ -8,3 +8,9 @@
 - [x] **Next Task:** See how to determine previously chosen players
 - [x] **Next Task:** Plan ways to improve clue selection to make the game more engaging
 - [x] Add "Reveal Letter" feature — reveal a random letter in the player's name at the cost of 1 star
+- [x] Check why the player "Mark O'Mahony" couldn't be submitted when chosen earlier in the week
+- [x] Fix visual bug where the "Reveal Letter" button doesn't fit on mobile devices
+- [x] Improve clue logic to ensure the 'decade' clue isn't used if we've already shown the 'seasons played' clue
+- [x] If the user refreshes mid-game, it should return them to their previous place in the game
+- [x] Change the "seasons played at the club" to "seasons at the club", because the current text wrongly implies that the player has played
+- [x] Improve the player selection to not choose a player that hasn't made a league appearance
