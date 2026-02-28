@@ -14,3 +14,7 @@
 - [x] If the user refreshes mid-game, it should return them to their previous place in the game
 - [x] Change the "seasons played at the club" to "seasons at the club", because the current text wrongly implies that the player has played
 - [x] Improve the player selection to not choose a player that hasn't made a league appearance
+- [x] Improve styling on main screen where the buttons to submit a guess or reveal a letter are below the fold on mobile, possibly just reduce the amount of white space above
+- [x] Improve the styling of the 'Next player in' countdown timer on the final page, as the colon separating the numbers is misaligned
+- [x] Review how we are using the Gemini API and how we could improve the quality of the cryptic clue and player bio output
+- [x] Review iconography used as the airplane icon doesn't make sense - should it be a seagull instead?

@@ -73,6 +73,16 @@ Fly.io (`fly.toml`): app `brighton-daily`, region `lhr`, port 8080, auto-scales 
 - **Test categories:** Data integrity, split_name, build_clues, recent players, get_daily_player, API routes, debug endpoints, Gemini routes, special character handling, clue logic, player selection filter.
 - **What to test:** New backend logic, edge cases for special characters in player names, clue deduplication rules, and player selection filters. Frontend-only changes (CSS, localStorage) don't need backend tests but should be manually verified before deploy.
 
+### UAT Before Deployment
+
+Before deploying any changes, run the app locally for user acceptance testing:
+
+1. **Start the local server:** `DEBUG=1 python app.py` (runs on http://localhost:5002 with debug mode enabled).
+2. **Notify the user** that the app is running at http://localhost:5002 and list the changes to test.
+3. **Debug mode features:** The refresh button (top-right) lets you switch to a random player for testing different scenarios.
+4. **Wait for user approval** before proceeding with deployment.
+5. **After UAT passes:** Run `pytest test_app.py -v`, then deploy with `flyctl deploy --depot=false`.
+
 ###  Session Management
 - **Naming Rule:** At the start of every new task or significant pivot, proactively rename the current session using the `/rename` command.
 - **Format:** Use `[Project-Name]: [Brief-Task-Description]` (e.g., `Brighton: CSV-Audit` or `Brighton: Fly-Deploy-Fix`).

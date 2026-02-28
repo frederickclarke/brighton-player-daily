@@ -332,26 +332,29 @@ def get_cryptic_clue():
     try:
         data = request.json
         player = players_df.iloc[int(data['player_id'])]
-        prompt = f"""
-        You are a witty and intelligent cryptic clue setter for a football guessing game.
-        Your task is to create a single, short, clever, cryptic clue based on wordplay of the footballer's name: "{player['name']}".
+        prompt = f"""You are a witty cryptic clue setter for a football guessing game. Create ONE short cryptic clue based on wordplay of the footballer's name: "{player['name']}".
 
-        **Instructions:**
-        1.  The clue MUST be based on the sound, spelling, or meaning of the player's name (first, last, or both).
-        2.  Do NOT use biographical information like their position, nationality, or former clubs. The clue must be about the name itself.
-        3.  Keep it short and punchy.
-        4.  Do not reveal the answer or the player's name in your response.
+Rules:
+- The clue MUST be based on the sound, spelling, or meaning of the name (first, last, or both).
+- Do NOT use biographical information (position, nationality, clubs). The clue is about the name itself.
+- Keep it to ONE sentence, maximum 20 words.
+- Do not reveal the answer or the player's name.
+- Reply with ONLY the clue text, no preamble or explanation.
 
-        **Examples of good clues:**
-        - For a player named "Gross": "Sounds like an unpleasant amount of goals."
-        - For a player named "Dunk": "To submerge a biscuit, or a type of slam in basketball."
-        - For a player named "Lallana": "This player's name sounds like a gentle song."
-        - For a player named "March": "The third month of the year, or to walk in a military manner."
+Examples:
+- "Gross": "Sounds like an unpleasant amount of goals."
+- "Dunk": "To submerge a biscuit, or a type of slam in basketball."
+- "March": "The third month, or to walk in military fashion."
+- "Welbeck": "A summoning gesture from a water source."
+"""
 
-        Now, generate a cryptic clue for: "{player['name']}"
-        """
-
-        response = model.generate_content(prompt)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=60,
+                temperature=0.9,
+            )
+        )
         return jsonify({'clue': response.text})
     except Exception as e:
         print(f"Gemini API error for cryptic clue: {e}")
@@ -366,29 +369,32 @@ def get_player_bio():
         data = request.json
         player = players_df.iloc[int(data['player_id'])]
         # Add new fields to the prompt if available
-        prompt = f"""
-You are a knowledgeable and enthusiastic football commentator. Write a short, engaging biography (2-3 sentences) for the following Brighton & Hove Albion footballer based ONLY on the data provided below.
+        prompt = f"""You are a knowledgeable football commentator. Write a short, engaging biography (2-3 sentences) for this Brighton & Hove Albion footballer based ONLY on the data below.
 
-**IMPORTANT: The seasons the player played for Brighton are listed below. YOU MUST include this information in the bio if it is present and the player is not still at the club.**
-
-**Player Data:**
-- Seasons played at Brighton: {player['seasons played at Brighton']}
+Player Data:
 - Name: {player['name']}
 - Position: {player['position']}
-- League Appearances for Brighton: {player['Brighton and Hove Albion league appearances']}
-- League Goals for Brighton: {player['Brighton and Hove Albion league goals']}
+- Seasons at Brighton: {player['seasons played at Brighton']}
+- Second spell seasons: {player['seasons at brighton during second spell']}
+- League Appearances: {player['Brighton and Hove Albion league appearances']}
+- League Goals: {player['Brighton and Hove Albion league goals']}
 - Joined From: {player['Team played for before Brighton and Hove Albion (first spell)']}
 - Left For: {player['Team played for after Brighton and Hove Albion (first spell)']}
-- Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}
 
-**Instructions:**
-1. Focus on their contribution and time at Brighton, and SPECIFICALLY mention the seasons they played for the club (see above).
-2. Do not invent facts, nicknames, or events not present in the data. Do not overestimate thier importance to the club.
-3. Write in a confident and informative tone. Do not say that information is limited or that further research is needed.
-
+Instructions:
+1. ALWAYS mention the seasons they played at Brighton.
+2. Do not invent facts, nicknames, or events not in the data. Do not overestimate their importance to the club.
+3. Write in a confident, informative tone. Do not say information is limited or further research is needed.
+4. Reply with ONLY the bio text, no preamble.
 """
         print(f"DEBUG: Player bio prompt:\n{prompt}")
-        response = model.generate_content(prompt)
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=200,
+                temperature=0.7,
+            )
+        )
         return jsonify({'bio': response.text})
     except Exception as e:
         print(f"Gemini API error for player bio: {e}")

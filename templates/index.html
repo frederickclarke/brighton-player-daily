@@ -152,8 +152,14 @@
         .header {
             background-color: #1976d2;
             color: #ffffff;
-            padding: 16px;
+            padding: 12px 16px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        @media (min-width: 640px) {
+            .header {
+                padding: 16px;
+            }
         }
 
         .header h1 {
@@ -199,12 +205,29 @@
             width: 90%;
         }
 
-        .countdown-timer span {
+        .countdown-timer {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .countdown-timer .time-unit {
             background-color: #e3f2fd;
             color: #1976d2;
             padding: 8px 12px;
             border-radius: 4px;
             font-weight: 500;
+            font-size: 1.25rem;
+            min-width: 48px;
+            text-align: center;
+        }
+
+        .countdown-timer .time-separator {
+            color: #1976d2;
+            font-weight: 600;
+            font-size: 1.25rem;
+            line-height: 1;
         }
 
         .bio-container {
@@ -252,7 +275,7 @@
             <h1 class="flex items-center gap-2 justify-center w-full text-center">
                 <span class="material-icons">sports_soccer</span>
                 Brighton Player Daily
-                <span class="material-icons">flight</span>
+                <svg width="24" height="24" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:inline-block;vertical-align:middle"><path d="M8 36 C 20 20, 26 20, 32 30 C 38 20, 44 20, 56 36" stroke="white" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </h1>
             <p class="text-center">Guess today's mystery Seagull! (Since 2002/03 season)</p>
         </div>
@@ -261,7 +284,7 @@
         </button>
     </header>
 
-    <main class="flex-grow container mx-auto px-4 py-8">
+    <main class="flex-grow container mx-auto px-4 py-4 sm:py-8">
         <div id="app-container" class="max-w-lg mx-auto">
             <div id="welcome-view" class="material-card p-6 space-y-6 text-center hidden">
                 <div class="flex flex-col items-center gap-2">
@@ -278,7 +301,7 @@
                 </button>
             </div>
 
-            <div id="game-view" class="material-card p-6 space-y-6 hidden">
+            <div id="game-view" class="material-card p-4 sm:p-6 space-y-3 sm:space-y-6 hidden">
                 <div>
                     <p class="text-center text-sm text-gray-600 mb-1">Today's Mystery Player:</p>
                     <p id="name-length-hint" class="text-center text-xs text-gray-400 mb-3 hidden"></p>
@@ -287,7 +310,7 @@
                     </div>
                 </div>
 
-                <div id="clue-section" class="bg-blue-50 p-4 rounded-lg border border-blue-100">
+                <div id="clue-section" class="bg-blue-50 p-3 sm:p-4 rounded-lg border border-blue-100">
                     <div id="clues-list"></div>
                 </div>
 
@@ -295,7 +318,7 @@
                     <p class="text-lg font-medium">Guess now for <span id="star-potential" class="font-bold text-amber-500">5 <span class="star">⭐</span></span></p>
                 </div>
 
-                <div id="feedback-message" class="text-center p-3 rounded-md min-h-[50px]"></div>
+                <div id="feedback-message" class="text-center p-2 sm:p-3 rounded-md min-h-[40px]"></div>
 
                 <button id="gemini-clue-btn" class="btn btn-gemini w-full mt-0 hidden">
                     <span class="material-icons">lightbulb</span>
@@ -346,8 +369,12 @@
 
                 <div class="mt-6 pt-6 border-t border-gray-200">
                     <p class="text-gray-600 mb-2">Next player in:</p>
-                    <div id="countdown-timer" class="flex justify-center space-x-2">
-                        <span id="hours">10</span> : <span id="minutes">23</span> : <span id="seconds">45</span>
+                    <div id="countdown-timer" class="countdown-timer">
+                        <span id="hours" class="time-unit">10</span>
+                        <span class="time-separator">:</span>
+                        <span id="minutes" class="time-unit">23</span>
+                        <span class="time-separator">:</span>
+                        <span id="seconds" class="time-unit">45</span>
                     </div>
                 </div>
             </div>
