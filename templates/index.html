@@ -1091,6 +1091,13 @@
               .then(data => {
                 if (data.success) {
                   clearGameState();
+                  // Remove today's completed game from stats so the new player starts fresh
+                  const stats = JSON.parse(localStorage.getItem(STATS_KEY));
+                  if (stats && stats.games) {
+                    const today = new Date().toISOString().split('T')[0];
+                    stats.games = stats.games.filter(g => g.date !== today);
+                    localStorage.setItem(STATS_KEY, JSON.stringify(stats));
+                  }
                   window.location.reload();
                 } else {
                   alert('Failed to change player');

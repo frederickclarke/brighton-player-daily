@@ -202,9 +202,11 @@ class TestBuildClues:
             assert "left Brighton to join" not in clue
             assert "Retired" not in clue
 
-    def test_still_at_club_generates_special_clue(self, still_at_club_player):
+    def test_still_at_club_suppressed_when_seasons_open_ended(self, still_at_club_player):
+        """'Still at club' clue is redundant when seasons already shows an open-ended range like '2010-'."""
         clues = app_module.build_clues(still_at_club_player, seed=42)
-        assert "This player is still at the club." in clues
+        assert "This player is still at the club." not in clues
+        assert any("Seasons at Brighton:" in c for c in clues)
 
     def test_second_spell_included(self, second_spell_player):
         clues = app_module.build_clues(second_spell_player, seed=42)

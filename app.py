@@ -199,11 +199,15 @@ def build_clues(player, seed=None):
     clues = []
     # Custom logic for the 'left_for' clue
     left_for_value = player['Team played for after Brighton and Hove Albion (first spell)']
+    seasons_str = player['seasons played at Brighton'] if player['seasons played at Brighton'] else ""
+    # An open-ended season like "2022-" already implies the player is still at the club,
+    # so suppress the redundant "still at the club" clue in that case.
+    seasons_implies_current = bool(seasons_str and str(seasons_str).strip().endswith('-'))
     if isinstance(left_for_value, str):
         if 'Retired' in left_for_value:
             left_for_clue = ""
         elif left_for_value.strip() == 'Still at club':
-            left_for_clue = "This player is still at the club."
+            left_for_clue = "" if seasons_implies_current else "This player is still at the club."
         else:
             left_for_clue = f"This player left Brighton to join {left_for_value}"
     else:
