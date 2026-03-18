@@ -79,6 +79,36 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.2);
         }
 
+        .btn-nextclue {
+            background-color: #0288d1;
+            color: #ffffff;
+        }
+        .btn-nextclue:hover:not(:disabled) {
+            background-color: #0277bd;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .btn-nextclue:disabled {
+            background: #e0e0e0;
+            color: #9e9e9e;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
+        .btn-cryptic {
+            background: linear-gradient(45deg, #7b1fa2, #9c27b0);
+            color: #ffffff;
+        }
+        .btn-cryptic:hover:not(:disabled) {
+            background: linear-gradient(45deg, #6a1b9a, #8e24aa);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .btn-cryptic:disabled {
+            background: #e0e0e0;
+            color: #9e9e9e;
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
+
         .btn-disabled {
             background-color: #e0e0e0;
             color: #9e9e9e;
@@ -320,21 +350,25 @@
 
                 <div id="feedback-message" class="text-center p-2 sm:p-3 rounded-md min-h-[40px]"></div>
 
-                <button id="gemini-clue-btn" class="btn btn-gemini w-full mt-0 hidden">
-                    <span class="material-icons">lightbulb</span>
-                    Get Cryptic Clue (Lose 2 ⭐)
-                </button>
                 <div id="game-buttons" class="space-y-3 mt-2">
                     <button id="submit-guess-btn" class="btn btn-primary w-full">
                         <span class="material-icons">check</span>
                         Submit Guess
                     </button>
-                    <div class="grid grid-cols-2 gap-2">
-                        <button id="reveal-letter-btn" class="btn btn-reveal w-full flex items-center justify-center gap-1 text-sm px-2 py-3" disabled>
-                            <span class="material-icons" style="font-size:18px">lightbulb</span> Reveal Letter (-1 ⭐)
+                    <div class="grid grid-cols-3 gap-2">
+                        <button id="reveal-letter-btn" class="btn btn-reveal w-full flex flex-col items-center justify-center text-xs px-1 py-3 leading-tight gap-0" disabled>
+                            <span>Reveal</span>
+                            <span>Letter</span>
+                            <span class="mt-1">(-1⭐)</span>
                         </button>
-                        <button id="next-clue-btn" class="btn btn-secondary w-full flex items-center justify-center gap-1 text-sm px-2 py-3" disabled>
-                            <span class="material-icons" style="font-size:18px">arrow_forward</span> Next Clue (4 <span class="star">⭐</span>)
+                        <button id="gemini-clue-btn" class="btn btn-cryptic w-full flex flex-col items-center justify-center text-xs px-1 py-3 leading-tight gap-0" disabled>
+                            <span>Cryptic</span>
+                            <span>Clue</span>
+                            <span class="mt-1">(-1⭐)</span>
+                        </button>
+                        <button id="next-clue-btn" class="btn btn-nextclue w-full flex flex-col items-center justify-center text-xs px-1 py-3 leading-tight gap-0" disabled>
+                            <div class="text-center leading-tight">Another<br>Clue</div>
+                            <span class="mt-1">(-1⭐)</span>
                         </button>
                     </div>
                 </div>
@@ -527,7 +561,7 @@
     const bioContainer = document.getElementById('bio-container');
     const bioLoading = document.getElementById('bio-loading');
     const bioContent = document.getElementById('bio-content');
-    let geminiClueBtn = null;
+    let geminiClueBtn = document.getElementById('gemini-clue-btn');
         
         // --- Game State ---
         let currentChallenge = {};
@@ -620,9 +654,10 @@
             nextClueBtn.disabled = false;
 
             if (geminiClueUsed) {
-                geminiClueBtn.classList.add('hidden');
-            } else if (currentClueIndex >= 2) {
+                geminiClueBtn.disabled = true;
+            } else {
                 geminiClueBtn.classList.remove('hidden');
+                updateCrypticClueButton();
             }
         }
 
@@ -816,6 +851,7 @@
             updateStarPotential();
             updateRevealButton();
             updateNextClueButton();
+            updateCrypticClueButton();
             saveGameState();
         }
 
@@ -835,6 +871,12 @@
             } else {
                 revealBtn.disabled = false;
             }
+        }
+
+        function updateCrypticClueButton() {
+            if (!geminiClueBtn) return;
+            const currentStars = Math.max(6 - revealedClues.length, 1);
+            geminiClueBtn.disabled = geminiClueUsed || currentStars < 2 || gameEnded;
         }
 
         function updateStarPotential() {
@@ -935,6 +977,7 @@
             updateStarPotential();
             updateNextClueButton();
             updateRevealButton();
+            updateCrypticClueButton();
             nextClueBtn.disabled = false;
             console.log('Game initialized, Next Clue button enabled.');
             gameView.classList.remove('hidden');
@@ -971,9 +1014,7 @@
                 updateNextClueButton();
                 updateRevealButton();
                 saveGameState();
-                if (currentClueIndex === 2 && !geminiClueUsed) {
-                    geminiClueBtn.classList.remove('hidden');
-                }
+                updateCrypticClueButton();
             }
         }
     
@@ -1002,14 +1043,11 @@
         // --- Start Game ---
         showWelcomeScreen();
 
-        // Add the cryptic clue button to the DOM
-        geminiClueBtn = document.getElementById('gemini-clue-btn');
-
         // Handle clicking the cryptic clue button
         if (geminiClueBtn) {
             geminiClueBtn.addEventListener('click', async () => {
                 geminiClueBtn.disabled = true;
-                geminiClueBtn.textContent = 'Loading cryptic clue...';
+                geminiClueBtn.textContent = 'Loading...';
                 try {
                     const response = await fetch('/api/cryptic-clue', {
                         method: 'POST',
@@ -1018,8 +1056,7 @@
                     });
                     const data = await response.json();
                     if (data.clue) {
-                        // Deduct 2 stars: add a dummy clue, then the cryptic clue
-                        revealedClues.push("Gemini penalty (used cryptic clue)");
+                        // Deduct 1 star for the cryptic clue
                         crypticClueText = data.clue;
                         revealedClues.push(`Cryptic Clue: ${crypticClueText}`);
                         renderCluesList();
@@ -1028,16 +1065,17 @@
                         updateNextClueButton();
                         updateRevealButton();
                         saveGameState();
-                        geminiClueBtn.classList.add('hidden');
+                        geminiClueBtn.innerHTML = '<span>Cryptic</span><span>Clue</span><span class="mt-1">(-1⭐)</span>';
+                        geminiClueBtn.disabled = true;
                     } else {
                         clueTextEl.textContent = data.error || 'Could not get cryptic clue.';
                         geminiClueBtn.disabled = false;
-                        geminiClueBtn.textContent = 'Get Cryptic Clue (Lose 2 ⭐)';
+                        geminiClueBtn.innerHTML = '<span>Cryptic</span><span>Clue</span><span class="mt-1">(-1⭐)</span>';
                     }
                 } catch (err) {
                     clueTextEl.textContent = 'Error getting cryptic clue.';
                     geminiClueBtn.disabled = false;
-                    geminiClueBtn.textContent = 'Get Cryptic Clue (Lose 2 ⭐)';
+                    geminiClueBtn.innerHTML = '<span>Cryptic</span><span>Clue</span><span class="mt-1">(-1⭐)</span>';
                 }
             });
         }
@@ -1301,11 +1339,21 @@
             if (!nextClueBtn) return;
             const currentStars = Math.max(6 - revealedClues.length, 1);
             // Show "Give Up" when at 1 star or all 5 clue slots used
+            const revealBtn = document.getElementById('reveal-letter-btn');
             if (currentStars === 1 || currentClueIndex >= 4) {
-                nextClueBtn.textContent = "Give Up";
+                nextClueBtn.innerHTML = '<span class="material-icons">close</span> Give Up';
+                nextClueBtn.classList.remove('flex-col');
+                nextClueBtn.classList.add('flex-row', 'text-base', 'py-3');
+                nextClueBtn.style.gridColumn = "1 / -1";
+                if (revealBtn) revealBtn.classList.add('hidden');
+                if (geminiClueBtn) geminiClueBtn.classList.add('hidden');
             } else {
-                const nextStars = Math.max(currentStars - 1, 1);
-                nextClueBtn.innerHTML = `<span class=\"material-icons\">arrow_forward</span> Next Clue (${nextStars} <span class=\"star\">⭐</span>)`;
+                nextClueBtn.innerHTML = `<div class="text-center leading-tight">Another<br>Clue</div><span class="mt-1">(-1⭐)</span>`;
+                nextClueBtn.classList.remove('flex-row', 'text-base', 'py-3');
+                nextClueBtn.classList.add('flex-col');
+                nextClueBtn.style.gridColumn = "";
+                if (revealBtn) revealBtn.classList.remove('hidden');
+                if (geminiClueBtn) geminiClueBtn.classList.remove('hidden');
             }
             console.log('updateNextClueButton called. Button disabled:', nextClueBtn.disabled, 'Label:', nextClueBtn.innerHTML || nextClueBtn.textContent);
         }
