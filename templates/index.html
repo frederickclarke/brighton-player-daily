@@ -70,6 +70,20 @@
             box-shadow: 0 0 0 3px rgba(224, 224, 224, 0.3);
         }
 
+        .btn-outline {
+            background-color: #ffffff;
+            color: #1976d2;
+            border: 2.5px solid #1976d2;
+        }
+        .btn-outline:hover {
+            background-color: #e3f2fd;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .btn-outline:focus {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(25, 118, 210, 0.3);
+        }
+
         .btn-gemini {
             background: linear-gradient(45deg, #1976d2, #2196f3);
             color: #ffffff;
@@ -400,6 +414,8 @@
                     <span class="material-icons">share</span>
                     Share Results
                 </button>
+
+                <div id="kofi-widget-container" class="mt-4"></div>
 
                 <div class="mt-6 pt-6 border-t border-gray-200">
                     <p class="text-gray-600 mb-2">Next player in:</p>
@@ -948,6 +964,12 @@
                 cluesDisplay.textContent = `Clues used: ${cluesUsed}`;
             } else {
                 cluesDisplay.textContent = '';
+            }
+
+            // Show Ko-fi button
+            const kofiContainer = document.getElementById('kofi-widget-container');
+            if (kofiContainer.children.length === 0) {
+                kofiContainer.innerHTML = '<a href="https://ko-fi.com/R6R71W8PLH" target="_blank" rel="noopener" class="btn btn-outline w-full sm:w-auto"><img src="https://storage.ko-fi.com/cdn/cup-border.png" alt="" style="height:20px;"> Buy me a coffee</a>';
             }
         }
     
