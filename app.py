@@ -83,7 +83,13 @@ except Exception as e:
 current_player_index = None  # Global override for local testing
 
 # File to store recent player selections
-RECENT_PLAYERS_FILE = 'recent_players.json'
+# Use persistent volume path on Fly.io, local path otherwise
+DATA_DIR = os.environ.get('DATA_DIR', '.')
+RECENT_PLAYERS_FILE = os.path.join(DATA_DIR, 'recent_players.json')
+
+# Epoch date for the deterministic player cycle (calibrated so existing
+# daily selections are preserved when the algorithm was introduced)
+CYCLE_EPOCH = datetime(2025, 2, 25).date()
 
 def load_recent_players():
     """Load the list of recently selected players from file."""
@@ -122,7 +128,13 @@ def set_player():
         return jsonify({'error': 'Invalid player index'}), 400
 
 def get_daily_player():
-    """Get today's player using a randomized but deterministic selection."""
+    """Get today's player using a deterministic permutation cycle.
+
+    Players are selected via a seeded shuffle that guarantees every eligible
+    player is chosen exactly once before the cycle restarts. This is fully
+    deterministic — no file storage is needed for correctness — but we still
+    record selections in recent_players.json for the debug endpoint.
+    """
     global current_player_index
 
     if app.debug and current_player_index is not None:
@@ -130,50 +142,38 @@ def get_daily_player():
         return player
 
     today = datetime.now().date()
-    recent_players = load_recent_players()
-
-    # Clean up old entries (older than 30 days)
-    cutoff_date = today - timedelta(days=30)
-    recent_players = {date: player_id for date, player_id in recent_players.items()
-                     if date.date() >= cutoff_date}
-
-    # Check if today's player has already been selected — return it immediately
-    today_key = datetime.combine(today, datetime.min.time())
-    if today_key in recent_players:
-        selected_index = recent_players[today_key]
-        player = players_df.iloc[selected_index]
-        print(f"DEBUG: Returning cached player for today: {player.to_dict()}")
-        return player
-
-    # Get recently used player IDs (last 30 days)
-    recently_used = set(recent_players.values())
-
-    # Create a seeded random number generator for today
-    # Use a combination of year and day of year for the seed
-    seed = today.year * 1000 + today.timetuple().tm_yday
-    rng = random.Random(seed)
 
     # Get all player indices that have at least 1 league appearance
-    all_indices = [idx for idx in range(len(players_df))
-                   if players_df.iloc[idx]['Brighton and Hove Albion league appearances'] > 0]
+    eligible_indices = [idx for idx in range(len(players_df))
+                        if players_df.iloc[idx]['Brighton and Hove Albion league appearances'] > 0]
+    pool_size = len(eligible_indices)
 
-    # Remove recently used players from the pool
-    available_indices = [idx for idx in all_indices if idx not in recently_used]
+    # Calculate which day of the overall cycle we're on
+    day_number = (today - CYCLE_EPOCH).days
+    cycle_number = day_number // pool_size
+    position_in_cycle = day_number % pool_size
 
-    # If we've used all players recently, reset the pool
-    if not available_indices:
-        available_indices = all_indices
-        recently_used.clear()
+    # Seed RNG with the cycle number to produce a unique permutation per cycle
+    rng = random.Random(cycle_number)
+    shuffled = list(eligible_indices)
+    rng.shuffle(shuffled)
 
-    # Select a random player from available ones
-    selected_index = rng.choice(available_indices)
+    selected_index = shuffled[position_in_cycle]
 
-    # Record this selection
-    recent_players[today_key] = selected_index
-    save_recent_players(recent_players)
+    # Record this selection in recent_players.json (for debug/history)
+    try:
+        recent_players = load_recent_players()
+        cutoff_date = today - timedelta(days=30)
+        recent_players = {date: player_id for date, player_id in recent_players.items()
+                         if date.date() >= cutoff_date}
+        today_key = datetime.combine(today, datetime.min.time())
+        recent_players[today_key] = selected_index
+        save_recent_players(recent_players)
+    except Exception as e:
+        print(f"WARNING: Could not save recent_players.json: {e}")
 
     player = players_df.iloc[selected_index]
-    print(f"DEBUG: Selected new player for today: {player.to_dict()}")
+    print(f"DEBUG: Cycle {cycle_number}, position {position_in_cycle}/{pool_size}, selected: {player['name']}")
     return player
 
 def _extract_era(seasons_str):

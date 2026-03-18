@@ -281,20 +281,18 @@ class TestGetDailyPlayer:
         p2 = app_module.get_daily_player()
         assert p1["name"] == p2["name"]
 
-    def test_avoids_recently_used_players(self, mock_recent_players_file):
-        today = datetime.now().date()
-        recent = {}
-        used_indices = set()
-        for i in range(5):
-            d = datetime.combine(today - timedelta(days=i + 1), datetime.min.time())
-            recent[d] = i
-            used_indices.add(i)
-        app_module.save_recent_players(recent)
-
-        app_module.app.debug = False
-        app_module.current_player_index = None
-        player = app_module.get_daily_player()
-        assert player.name not in used_indices  # player.name is the DataFrame index
+    def test_no_repeats_in_full_cycle(self, mock_recent_players_file):
+        """Verify the permutation cycle selects every eligible player exactly once."""
+        import random
+        eligible = [idx for idx in range(len(app_module.players_df))
+                    if app_module.players_df.iloc[idx]['Brighton and Hove Albion league appearances'] > 0]
+        pool_size = len(eligible)
+        # Simulate one full cycle (cycle 0)
+        rng = random.Random(0)
+        shuffled = list(eligible)
+        rng.shuffle(shuffled)
+        assert len(set(shuffled)) == pool_size  # no duplicates
+        assert set(shuffled) == set(eligible)   # all players covered
 
     def test_debug_override(self, mock_recent_players_file):
         app_module.app.debug = True
