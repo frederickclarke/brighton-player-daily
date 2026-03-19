@@ -669,12 +669,7 @@
             submitGuessBtn.disabled = false;
             nextClueBtn.disabled = false;
 
-            if (geminiClueUsed) {
-                geminiClueBtn.disabled = true;
-            } else {
-                geminiClueBtn.classList.remove('hidden');
-                updateCrypticClueButton();
-            }
+            updateCrypticClueButton();
         }
 
         // --- API Communication ---
@@ -892,6 +887,12 @@
         function updateCrypticClueButton() {
             if (!geminiClueBtn) return;
             const currentStars = Math.max(6 - revealedClues.length, 1);
+            // Hide when in give-up mode (same condition as updateNextClueButton)
+            if (currentStars === 1 || currentClueIndex >= 4) {
+                geminiClueBtn.classList.add('hidden');
+            } else {
+                geminiClueBtn.classList.remove('hidden');
+            }
             geminiClueBtn.disabled = geminiClueUsed || currentStars < 2 || gameEnded;
         }
 
