@@ -10,7 +10,7 @@ Brighton Player Daily — a Wordle-style daily guessing game for Brighton & Hove
 
 ```bash
 # Run locally (starts on http://localhost:5002 with debug mode)
-python app.py
+python3 app.py
 
 # Install dependencies
 pip install -r requirements.txt
@@ -77,7 +77,7 @@ Fly.io (`fly.toml`): app `brighton-daily`, region `lhr`, port 8080, auto-scales 
 
 Before deploying any changes, run the app locally for user acceptance testing:
 
-1. **Start the local server:** `DEBUG=1 python app.py` (runs on http://localhost:5002 with debug mode enabled).
+1. **Start the local server:** `DEBUG=1 python3 app.py` (runs on http://localhost:5002 with debug mode enabled).
 2. **Notify the user** that the app is running at http://localhost:5002 and list the changes to test.
 3. **Debug mode features:** The refresh button (top-right) lets you switch to a random player for testing different scenarios.
 4. **Wait for user approval** before proceeding with deployment.

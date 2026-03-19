@@ -45,19 +45,19 @@ def debug_client():
 @pytest.fixture
 def sample_player():
     """Lewis Dunk — 'Still at club', single spell."""
-    return app_module.players_df.iloc[72]
+    return app_module.players_df.iloc[71]
 
 
 @pytest.fixture
 def retired_player():
     """Bruno Saltor — 'Retired' in left_for field."""
-    return app_module.players_df.iloc[62]
+    return app_module.players_df.iloc[61]
 
 
 @pytest.fixture
 def still_at_club_player():
     """Lewis Dunk — 'Still at club'."""
-    return app_module.players_df.iloc[72]
+    return app_module.players_df.iloc[71]
 
 
 @pytest.fixture
@@ -84,7 +84,7 @@ class TestDataIntegrity:
         assert len(app_module.players_df) > 0
 
     def test_expected_row_count(self):
-        assert len(app_module.players_df) == 184
+        assert len(app_module.players_df) == 183
 
     def test_all_required_columns_present(self):
         required = [
@@ -196,7 +196,7 @@ class TestBuildClues:
             assert "Retired" not in clue
 
     def test_retired_medical_excludes_left_for(self):
-        player = app_module.players_df.iloc[120]  # Enock Mwepu
+        player = app_module.players_df.iloc[119]  # Enock Mwepu
         clues = app_module.build_clues(player, seed=42)
         for clue in clues:
             assert "left Brighton to join" not in clue
@@ -375,9 +375,9 @@ class TestAPIRoutes:
         assert "fullName" not in data
 
     def test_guess_single_name_player(self, debug_client):
-        debug_client.post("/api/set-player", json={"player_id": 91})
+        debug_client.post("/api/set-player", json={"player_id": 90})
         resp = debug_client.post("/api/guess", json={
-            "player_id": 91,
+            "player_id": 90,
             "guess_first": "bernardo",
             "guess_last": "",
         })
@@ -531,14 +531,14 @@ class TestClueLogic:
 
     def test_era_clue_suppressed_when_seasons_exist(self):
         """Era clue ('played during the 2010s') should not appear when seasons data exists."""
-        player = app_module.players_df.iloc[72]  # Lewis Dunk — has seasons data
+        player = app_module.players_df.iloc[71]  # Lewis Dunk — has seasons data
         clues = app_module.build_clues(player, seed=42)
         for clue in clues:
             assert "played for Brighton during the" not in clue
 
     def test_seasons_clue_says_at_not_played_at(self):
         """Seasons clue should say 'Seasons at Brighton' not 'Seasons played at Brighton'."""
-        player = app_module.players_df.iloc[72]
+        player = app_module.players_df.iloc[71]
         clues = app_module.build_clues(player, seed=42)
         seasons_clues = [c for c in clues if "Seasons at Brighton:" in c]
         assert len(seasons_clues) > 0, "Seasons clue should be present"
