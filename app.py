@@ -23,6 +23,16 @@ else:
 app = Flask(__name__)  # Create a new Flask web application
 app.debug = os.environ.get('FLASK_ENV') == 'development' or os.environ.get('DEBUG') == '1' or app.debug
 
+# Prevent browsers/CDNs from caching API responses.  Stale cached data
+# (e.g. an old player_id from /api/daily-challenge) can cause clue
+# mismatches if the CSV indices change between deployments.
+@app.after_request
+def set_cache_headers(response):
+    if request.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+    return response
+
 # --- Data Loading and Processing ---
 try:
     # Load the CSV file containing player data into a pandas DataFrame
@@ -248,9 +258,13 @@ def build_clues(player, seed=None):
     tier_2 = [(c, t) for c, t in tier_2 if c.strip()]
     tier_3 = [(c, t) for c, t in tier_3 if c.strip()]
 
-    # Shuffle within each tier deterministically
+    # Shuffle within each tier deterministically.
+    # Seed must NOT include the current date/time — that would reshuffle
+    # clues at midnight UTC, causing reordered/duplicate clues for users
+    # playing across the day boundary.  Use the player's DataFrame index
+    # instead, which is stable for the lifetime of the game session.
     if seed is None:
-        seed = str(datetime.now().date()) + str(player.name)
+        seed = str(player.name)
     rng = random.Random(seed)
     rng.shuffle(tier_1)
     rng.shuffle(tier_2)
@@ -292,7 +306,7 @@ def get_clue():
         data = request.json  # Get the data sent by the frontend
         player_id = data.get('player_id')  # Get the player's index
         player = players_df.iloc[int(player_id)]  # Get the player's data
-        clues = build_clues(player, seed=str(datetime.now().date()) + str(player_id))
+        clues = build_clues(player, seed=str(player_id))
         return jsonify({'clue': clues[data.get('clue_index', 0)]})  # Return the requested clue
     except KeyError as e:
         # If a column is missing, return an error
