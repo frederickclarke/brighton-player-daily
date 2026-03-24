@@ -545,6 +545,16 @@ class TestClueLogic:
         for c in clues:
             assert "Seasons played at Brighton" not in c
 
+    def test_no_duplicate_clue_text_for_any_player(self):
+        """Every player's clue list must contain only unique text (no repeated clues)."""
+        for idx in range(len(app_module.players_df)):
+            player = app_module.players_df.iloc[idx]
+            clues = app_module.build_clues(player, seed=42)
+            assert len(clues) == len(set(clues)), (
+                f"Player {player['name']} (id={idx}) has duplicate clue text: "
+                f"{[c for c in clues if clues.count(c) > 1]}"
+            )
+
     def test_era_suppression_across_multiple_players(self):
         """For any player with seasons data, era clue should be suppressed."""
         for idx in range(min(30, len(app_module.players_df))):

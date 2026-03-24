@@ -31,7 +31,9 @@ flyctl deploy --depot=false
 
 **Single-file frontend:** `templates/index.html` — ~1150 lines of HTML/JS/Tailwind CSS (CDN). All game logic, UI rendering, share modal, and stats (localStorage) live here. No build step.
 
-**Data file:** `brighton_players.csv` — ~184 players with 22 columns (name, DOB, position, appearances, goals, transfer history, seasons, spells). This is the single source of truth for all player data.
+**Data file:** `brighton_players.csv` — ~183 players with 22 columns (name, DOB, position, appearances, goals, transfer history, seasons, spells). This is the single source of truth for all player data.
+
+> **⚠️ Never delete rows from the CSV.** The backend uses positional DataFrame indices as player IDs, which are sent to the frontend. Deleting a row shifts all subsequent indices, causing mismatched clues for any user who loaded the page before the deploy. If a player doesn't belong, **replace them with a new player** in the same row instead.
 
 ### Key Backend Mechanics
 

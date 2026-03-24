@@ -587,6 +587,7 @@
         let geminiClueUsed = false;
         let crypticClueText = '';
         let revealedClues = [];
+        let fetchingClue = false;
         let revealedLetterPositions = []; // indices into letterInputs[] for revealed letters
 
         // --- Game State Persistence ---
@@ -1010,6 +1011,7 @@
         }
     
         async function handleNextClue() {
+            if (fetchingClue) return; // Prevent concurrent clue fetches
             const currentStars = Math.max(6 - revealedClues.length, 1);
             if (gameEnded) return;
 
@@ -1028,8 +1030,12 @@
             }
 
             if (currentClueIndex >= 4) return; // Already at max clues
+            fetchingClue = true;
+            nextClueBtn.disabled = true;
             const nextClueText = await fetchNextClue();
-            if (nextClueText) {
+            fetchingClue = false;
+            nextClueBtn.disabled = false;
+            if (nextClueText && !revealedClues.includes(nextClueText)) {
                 currentClueIndex++;
                 revealedClues.push(nextClueText);
                 renderCluesList();
