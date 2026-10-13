@@ -185,6 +185,11 @@ class TestSplitName:
 # 3. build_clues
 # ---------------------------------------------------------------------------
 
+def candidate_texts(player):
+    """All possible clues for a player (build_clues only returns the 5 chosen ones)."""
+    return [c["text"] for c in app_module._candidate_clues(player)]
+
+
 class TestBuildClues:
 
     def test_returns_nonempty_list(self, sample_player):
@@ -196,12 +201,13 @@ class TestBuildClues:
         b = app_module.build_clues(sample_player, seed=42)
         assert a == b
 
-    def test_different_seed_produces_different_result(self, sample_player):
-        a = app_module.build_clues(sample_player, seed=42)
-        b = app_module.build_clues(sample_player, seed=99)
-        # Different seeds should produce a different list (order and/or content
-        # may differ because shuffle order affects fact-dedup outcomes)
-        assert a != b
+    def test_different_seed_can_produce_different_result(self):
+        """Seeds break ties between equally interesting clues, so some players must vary."""
+        df = app_module.players_df
+        assert any(
+            app_module.build_clues(df.iloc[i], seed=42) != app_module.build_clues(df.iloc[i], seed=99)
+            for i in range(len(df))
+        )
 
     def test_retired_player_excludes_left_for(self, retired_player):
         clues = app_module.build_clues(retired_player, seed=42)
@@ -227,18 +233,18 @@ class TestBuildClues:
     def test_released_player_gets_released_clue(self):
         df = app_module.players_df
         player = df[df["name"] == "Solly March"].iloc[0]
-        clues = app_module.build_clues(player, seed=42)
+        clues = candidate_texts(player)
         assert not any("join Released" in c for c in clues)
         assert any(c == "This player was released by Brighton." for c in clues)
 
     def test_still_at_club_suppressed_when_seasons_open_ended(self, still_at_club_player):
         """'Still at club' clue is redundant when seasons already shows an open-ended range like '2010-'."""
-        clues = app_module.build_clues(still_at_club_player, seed=42)
+        clues = candidate_texts(still_at_club_player)
         assert "This player is still at the club." not in clues
         assert any("Seasons at Brighton:" in c for c in clues)
 
     def test_second_spell_included(self, second_spell_player):
-        clues = app_module.build_clues(second_spell_player, seed=42)
+        clues = candidate_texts(second_spell_player)
         assert any("second spell" in c.lower() for c in clues)
 
     def test_no_second_spell_excluded(self, sample_player):
@@ -247,48 +253,42 @@ class TestBuildClues:
 
     def test_second_spell_seasons_preferred_over_spell_count(self, second_spell_player):
         """With 2 spells, the specific second-spell seasons clue makes '2 separate spells' redundant."""
-        for seed in range(20):
-            clues = app_module.build_clues(second_spell_player, seed=seed)
-            assert any("second spell" in c for c in clues)
-            assert not any("separate spells" in c for c in clues)
+        clues = candidate_texts(second_spell_player)
+        assert any("second spell" in c for c in clues)
+        assert not any("separate spells" in c for c in clues)
 
     def test_three_spell_player_gets_spell_count(self):
         df = app_module.players_df
         player = df[df["number of spells at Brighton and Hove Albion"].astype(str) == "3"].iloc[0]
-        clues = app_module.build_clues(player, seed=42)
+        clues = candidate_texts(player)
         assert any("3 separate spells" in c for c in clues)
 
     def test_no_spell_s_wording(self):
         """The clunky 'spell(s)' wording should never appear."""
         for idx in range(len(app_module.players_df)):
-            clues = app_module.build_clues(app_module.players_df.iloc[idx], seed=42)
+            clues = candidate_texts(app_module.players_df.iloc[idx])
             assert not any("spell(s)" in c for c in clues)
 
     def test_dob_clue_reachable(self):
         """The date-of-birth clue used to be permanently deduped away by the birthplace clue."""
         df = app_module.players_df
-        assert any(
-            any("was born on" in c for c in app_module.build_clues(df.iloc[i]))
+        assert all(
+            any("was born on" in c for c in candidate_texts(df.iloc[i]))
             for i in range(len(df))
         )
 
     def test_birthplace_and_dob_both_present(self, sample_player):
-        clues = app_module.build_clues(sample_player, seed=42)
+        clues = candidate_texts(sample_player)
         assert any("was born in" in c for c in clues)
         assert any("was born on" in c for c in clues)
 
     def test_last_visible_clue_is_decisive(self):
-        """The final clue the frontend shows should be a decisive one (previous club or DOB)."""
-        n = app_module.MAX_VISIBLE_CLUES
-        decisive_markers = ("was born on", "joined Brighton", "came through", "arrived at Brighton",
-                            "loaned out to", "free agent")
+        """Clue 5 should fit at most DECISIVE_FITS players."""
         for idx in range(len(app_module.players_df)):
             player = app_module.players_df.iloc[idx]
+            fits = {c["text"]: c["fits"] for c in app_module._candidate_clues(player)}
             clues = app_module.build_clues(player)
-            if len(clues) >= n:
-                assert any(m in clues[n - 1] for m in decisive_markers), (
-                    f"{player['name']}: clue {n} is not decisive: {clues[n - 1]}"
-                )
+            assert fits[clues[-1]] <= app_module.DECISIVE_FITS, f"{player['name']}: {clues[-1]}"
 
     def test_position_not_in_first_clue(self):
         """Position is a weak filler clue and should never be the 5-star clue."""
@@ -305,7 +305,7 @@ class TestBuildClues:
         for idx in range(min(20, len(app_module.players_df))):
             player = app_module.players_df.iloc[idx]
             clues = app_module.build_clues(player, seed=42)
-            assert 4 <= len(clues) <= 9, (
+            assert len(clues) == app_module.MAX_VISIBLE_CLUES, (
                 f"Player {player['name']} has {len(clues)} clues"
             )
 
@@ -708,7 +708,7 @@ class TestClueLogic:
     def test_seasons_clue_says_at_not_played_at(self):
         """Seasons clue should say 'Seasons at Brighton' not 'Seasons played at Brighton'."""
         player = app_module.players_df.iloc[71]
-        clues = app_module.build_clues(player, seed=42)
+        clues = candidate_texts(player)
         seasons_clues = [c for c in clues if "Seasons at Brighton:" in c]
         assert len(seasons_clues) > 0, "Seasons clue should be present"
         for c in clues:
@@ -734,6 +734,152 @@ class TestClueLogic:
                     assert "played for Brighton during the" not in clue, (
                         f"Era clue leaked for {player['name']}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# 10b. Derived Clues (stadium, divisions, landmarks, ranks, selection)
+# ---------------------------------------------------------------------------
+
+def _player(name):
+    df = app_module.players_df
+    return df[df["name"] == name].iloc[0]
+
+
+def _candidates_by_key(player):
+    return {c["key"]: c for c in app_module._candidate_clues(player)}
+
+
+class TestDerivedClues:
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("2007-2010", [2007, 2008, 2009]),
+        ("2021", [2021]),
+        ("2010-2010", [2010]),
+        ("", []),
+    ])
+    def test_season_years(self, raw, expected):
+        assert app_module._season_years(raw) == expected
+
+    def test_open_ended_seasons_run_to_current(self):
+        years = app_module._season_years("2024-")
+        assert years[0] == 2024 and years[-1] == app_module._current_season()
+
+    @pytest.mark.parametrize("season, tier", [
+        (1999, 4), (2000, 4), (2001, 3), (2002, 2), (2003, 3), (2004, 2), (2005, 2),
+        (2006, 3), (2010, 3), (2011, 2), (2016, 2), (2017, 1), (2025, 1),
+    ])
+    def test_league_tier(self, season, tier):
+        assert app_module._league_tier(season) == tier
+
+    @pytest.mark.parametrize("season, stadium", [
+        (1996, "the Goldstone Ground"), (1997, "Gillingham's Priestfield"), (1998, "Gillingham's Priestfield"),
+        (1999, "Withdean"), (2010, "Withdean"), (2011, "the Amex"),
+    ])
+    def test_stadium(self, season, stadium):
+        assert app_module._stadium(season) == stadium
+
+    def test_withdean_and_amex_stadium_clue(self, sample_player):
+        clue = _candidates_by_key(sample_player)["stadium"]["text"]  # Lewis Dunk, 2010-
+        assert clue == "This player played home games for Brighton at both Withdean and the Amex."
+
+    def test_amex_only_players_get_no_stadium_clue(self):
+        assert "stadium" not in _candidates_by_key(_player("Mats Wieffer"))
+
+    def test_landmark_clue(self, sample_player):
+        clue = _candidates_by_key(sample_player)["landmark"]["text"]
+        assert "League One title in 2011" in clue
+
+    def test_goal_drought_clue_replaces_goals_clue(self):
+        cands = _candidates_by_key(_player("Michel Kuipers"))
+        assert cands["drought"]["text"] == "This player made 247 league appearances without scoring a single league goal."
+        assert "goals" not in cands
+
+    def test_rank_clues_say_since_2002(self, sample_player):
+        cands = _candidates_by_key(sample_player)
+        assert cands["apps_rank"]["text"] == "This player has more league appearances than any other player since 2002."
+        assert "since 2002" in cands["goals_rank"]["text"]
+
+    def test_current_player_gets_no_career_ended_clue(self):
+        """Players currently at the club (e.g. Pascal Gross in a second spell) haven't ended their careers."""
+        for idx in range(len(app_module.players_df)):
+            player = app_module.players_df.iloc[idx]
+            if app_module._is_current(player):
+                assert "age_out" not in _candidates_by_key(player), player["name"]
+
+    def test_no_duplicated_country_in_birthplace(self):
+        """Players whose place of birth is just 'England' shouldn't get 'born in England, England'."""
+        for idx in range(len(app_module.players_df)):
+            for text in candidate_texts(app_module.players_df.iloc[idx]):
+                assert "England, England" not in text
+
+    def test_fits_counts_include_the_player(self):
+        for idx in range(0, len(app_module.players_df), 10):
+            for c in app_module._candidate_clues(app_module.players_df.iloc[idx]):
+                assert c["fits"] >= 1
+
+    def test_teammate_clue_never_names_the_player(self):
+        for idx in range(len(app_module.players_df)):
+            player = app_module.players_df.iloc[idx]
+            cands = _candidates_by_key(player)
+            if "teammate" in cands:
+                assert player["name"] not in cands["teammate"]["text"]
+
+
+class TestClueSelection:
+
+    def _chosen(self, player):
+        cands = {c["text"]: c for c in app_module._candidate_clues(player)}
+        return [cands[t] for t in app_module.build_clues(player)]
+
+    def test_first_clue_usually_in_target_band(self):
+        """Clue 1 should fit a handful of players for nearly everyone."""
+        lo, hi = app_module.FIRST_CLUE_FITS
+        df = app_module.players_df
+        in_band = sum(lo <= self._chosen(df.iloc[i])[0]["fits"] <= hi for i in range(len(df)))
+        assert in_band / len(df) >= 0.9
+
+    def test_one_of_first_two_clues_places_player_in_time(self):
+        df = app_module.players_df
+        for i in range(len(df)):
+            player = df.iloc[i]
+            chosen = self._chosen(player)
+            non_decisive_era = [c for c in app_module._candidate_clues(player)
+                                if c["key"] in app_module.ERA_CLUES and c["fits"] > app_module.DECISIVE_FITS]
+            if non_decisive_era:
+                assert {c["key"] for c in chosen[:2]} & app_module.ERA_CLUES, player["name"]
+
+    def test_no_two_clues_share_a_fact(self):
+        df = app_module.players_df
+        for i in range(len(df)):
+            groups = [app_module.FACT_GROUPS.get(c["key"], c["key"]) for c in self._chosen(df.iloc[i])]
+            assert len(groups) == len(set(groups)), df.iloc[i]["name"]
+
+    def test_position_never_chosen_when_alternatives_exist(self):
+        df = app_module.players_df
+        for i in range(len(df)):
+            player = df.iloc[i]
+            if len(app_module._candidate_clues(player)) > app_module.MAX_VISIBLE_CLUES + 3:
+                assert all(c["key"] != "position" for c in self._chosen(player)), player["name"]
+
+    def test_first_clue_never_boring_and_broad(self):
+        """Clue 1 should never be something like 'scored 0 league goals' (fits ~77 players)."""
+        lo, hi = app_module.FIRST_CLUE_FITS
+        df = app_module.players_df
+        for i in range(len(df)):
+            first = self._chosen(df.iloc[i])[0]
+            assert not (first["fits"] > hi and app_module.CLUE_INTEREST[first["key"]] < 3), (
+                f"{df.iloc[i]['name']}: {first['text']}"
+            )
+
+    def test_middle_clues_ordered_broad_to_narrow(self, sample_player):
+        chosen = self._chosen(sample_player)
+        middle = [c["fits"] for c in chosen[1:-1]]
+        assert middle == sorted(middle, reverse=True)
+
+    def test_cached_result_is_not_mutable(self, sample_player):
+        clues = app_module.build_clues(sample_player)
+        clues.append("tampered")
+        assert "tampered" not in app_module.build_clues(sample_player)
 
 
 # ---------------------------------------------------------------------------

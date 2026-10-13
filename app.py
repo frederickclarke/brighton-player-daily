@@ -285,113 +285,400 @@ def _joined_from_clue(value):
     return f"This player joined Brighton from {value}."
 
 
+# --- Derived-clue lookups ---------------------------------------------------
+# Seasons are identified by their starting year (2010 = 2010-11). The CSV's
+# "2007-2010" means the player arrived in 2007 and left in summer 2010.
+
+def _current_season():
+    today = datetime.now()
+    return today.year if today.month >= 7 else today.year - 1
+
+
+def _league_tier(season):
+    """Brighton's division for a season (1 = top flight)."""
+    if season <= 2000:
+        return 4
+    if season in (2001, 2003) or 2006 <= season <= 2010:
+        return 3
+    if season in (2002, 2004, 2005) or 2011 <= season <= 2016:
+        return 2
+    return 1  # Premier League since 2017-18 — update if that ever changes
+
+
+TIER_NAMES = {1: "the Premier League", 2: "the second tier", 3: "the third tier", 4: "the fourth tier"}
+
+STADIUMS = ["the Goldstone Ground", "Gillingham's Priestfield", "Withdean", "the Amex"]
+
+
+def _stadium(season):
+    if season <= 1996:
+        return STADIUMS[0]
+    if season <= 1998:
+        return STADIUMS[1]
+    if season <= 2010:
+        return STADIUMS[2]
+    return STADIUMS[3]
+
+
+LANDMARK_SEASONS = {
+    2000: "won the Division Three title in 2001",
+    2001: "won the Division Two title in 2002",
+    2003: "won promotion via the play-offs in 2004",
+    2010: "won the League One title in 2011",
+    2016: "won promotion to the Premier League in 2017",
+    2022: "qualified for Europe for the first time in 2023",
+}
+
+SUSSEX_TOWNS = {'Brighton', 'Hove', 'Worthing', 'Eastbourne', 'Lewes', 'Crawley', 'Hastings',
+                'Haywards Heath', 'Chichester', 'Bognor Regis', 'Shoreham-by-Sea', 'Horsham'}
+
+# How interesting each clue type is to a fan. Clue 1 is the most interesting
+# clue that doesn't give the answer away; position is deliberately last.
+CLUE_INTEREST = {
+    'landmark': 5, 'stadium': 5, 'drought': 5,
+    'teammate': 4, 'apps_rank': 4, 'goals_rank': 4, 'rate': 4, 'nationality': 4,
+    'divisions': 3, 'age_in': 3, 'age_out': 3, 'longevity': 3, 'local': 3,
+    'left_for': 3, 'joined_from': 3, 'spells': 3, 'seasons2': 3,
+    'goals': 2, 'appearances': 2, 'seasons': 2, 'birthplace': 2,
+    'era': 1, 'dob': 1, 'position': 0,
+}
+# Clues that place the player in time — clue 1 or 2 should always be one
+ERA_CLUES = {'era', 'seasons', 'stadium', 'landmark', 'divisions'}
+# Clues that state the same underlying fact; only one per group is used
+FACT_GROUPS = {
+    'birthplace': 'birth', 'local': 'birth', 'nationality': 'birth',
+    'seasons': 'duration', 'longevity': 'duration',
+    'drought': 'goals', 'goals': 'goals',
+    'seasons2': 'spells', 'spells': 'spells',
+}
+FIRST_CLUE_FITS = (3, 25)   # clue 1 should fit a handful of players, not one or fifty
+DECISIVE_FITS = 2           # clue 5 should fit at most this many players
+
+
+def _int(value):
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _season_years(seasons_str):
+    """'2007-2010' → [2007, 2008, 2009]; '2024-' → 2024..current; '2021' → [2021]."""
+    years = []
+    for part in str(seasons_str or '').split(','):
+        part = part.strip()
+        m = re.match(r'^(\d{4})-(\d{4})?$', part)
+        if m:
+            start = int(m.group(1))
+            end = int(m.group(2)) if m.group(2) else _current_season() + 1
+            years += range(start, max(end, start + 1))
+        elif re.match(r'^\d{4}$', part):
+            years.append(int(part))
+    return years
+
+
+def _player_years(player):
+    return sorted(set(_season_years(player['seasons played at Brighton']) +
+                      _season_years(player['seasons at brighton during second spell'])))
+
+
+def _is_current(player):
+    return any(str(player[c]).strip().endswith('-')
+               for c in ('seasons played at Brighton', 'seasons at brighton during second spell'))
+
+
+def _birth_year(player):
+    try:
+        dob = datetime.strptime(str(player['date of birth']).strip(), '%d-%b-%y')
+    except ValueError:
+        return None
+    return dob.year - 100 if dob.year > datetime.now().year else dob.year
+
+
+def _ordinal(n):
+    return f"{n}{'th' if 10 <= n % 100 <= 20 else {1: 'st', 2: 'nd', 3: 'rd'}.get(n % 10, 'th')}"
+
+
+class _PlayerFacts:
+    """Per-player values that clue signatures are computed from (cached per player id)."""
+    def __init__(self, player):
+        self.id = player.name
+        self.years = _player_years(player)
+        self.year_set = set(self.years)
+        self.birth_year = _birth_year(player)
+        self.apps = _int(player['Brighton and Hove Albion league appearances'])
+        self.goals = _int(player['Brighton and Hove Albion league goals'])
+        self.current = _is_current(player)
+
+
+_facts_cache = {}
+_clue_cache = {}
+_candidate_cache = {}
+
+
+def _all_facts():
+    key = (id(players_df), len(players_df))
+    if _facts_cache.get('key') != key:
+        _facts_cache.clear()
+        _clue_cache.clear()
+        _candidate_cache.clear()
+        _facts_cache['key'] = key
+        _facts_cache['all'] = [_PlayerFacts(players_df.iloc[i]) for i in range(len(players_df))]
+    return _facts_cache['all']
+
+
+def _rank(value, values):
+    """Competition rank (1 = highest) and whether it's shared."""
+    higher = sum(1 for v in values if v > value)
+    tied = sum(1 for v in values if v == value) > 1
+    return higher + 1, tied
+
+
+def _candidate_clues(player):
+    """
+    Every possible clue for a player as dicts: {key, text, fits}.
+    `fits` is how many players in the dataset the same clue would describe
+    (including this one) — lower means more decisive.
+    """
+    everyone = _all_facts()
+    if player.name in _candidate_cache:
+        return [dict(c) for c in _candidate_cache[player.name]]
+    me = _PlayerFacts(player)
+    rows = [players_df.iloc[i] for i in range(len(players_df))]
+    candidates = []
+
+    def add(key, text, signature):
+        """signature(row, facts) returns a value; players with an equal value also fit the clue."""
+        if not text:
+            return
+        mine = signature(player, me)
+        if mine is None:
+            return
+        fits = sum(1 for r, f in zip(rows, everyone) if signature(r, f) == mine)
+        candidates.append({'key': key, 'text': text, 'fits': max(fits, 1)})
+
+    col = lambda name: (lambda r, f: str(r[name]).strip())
+
+    # --- Basic clues ---
+    left_for_value = str(player['Team played for after Brighton and Hove Albion (first spell)']).strip()
+    if 'retired' in left_for_value.lower() or not left_for_value:
+        left_for_clue = ""
+    elif left_for_value == 'Still at club':
+        # An open-ended season like "2022-" already implies the player is still at the club
+        seasons_str = str(player['seasons played at Brighton']).strip()
+        left_for_clue = "" if seasons_str.endswith('-') else "This player is still at the club."
+    elif left_for_value == 'Released':
+        left_for_clue = "This player was released by Brighton."
+    else:
+        left_for_clue = f"This player left Brighton to join {left_for_value}."
+    add('left_for', left_for_clue, col('Team played for after Brighton and Hove Albion (first spell)'))
+
+    if player['seasons played at Brighton']:
+        add('seasons', f"Seasons at Brighton: {player['seasons played at Brighton']}", col('seasons played at Brighton'))
+    else:
+        era = _extract_era(player['seasons played at Brighton'])
+        add('era', f"This player played for Brighton during {era}." if era else "",
+            lambda r, f: _extract_era(r['seasons played at Brighton']))
+    if player['seasons at brighton during second spell']:
+        add('seasons2', f"Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}",
+            col('seasons at brighton during second spell'))
+
+    spells = _int(player['number of spells at Brighton and Hove Albion']) or 1
+    # Only shown when it adds information beyond the second-spell seasons clue
+    if spells > 2 or (spells > 1 and not player['seasons at brighton during second spell']):
+        add('spells', f"This player had {spells} separate spells at Brighton.",
+            col('number of spells at Brighton and Hove Albion'))
+
+    place, country = str(player['place of birth']).strip(), str(player['country of birth']).strip()
+    birthplace = place if place == country or not country else f"{place}, {country}"
+    add('birthplace', f"This player was born in {birthplace}." if place else "",
+        lambda r, f: (str(r['place of birth']).strip(), str(r['country of birth']).strip()))
+
+    add('appearances', f"This player made {me.apps} league appearances for Brighton.", lambda r, f: f.apps)
+    if me.goals or me.apps < 50:  # 50+ apps without a goal gets the more interesting drought clue
+        add('goals', f"This player scored {me.goals} league goals for Brighton.", lambda r, f: f.goals)
+    add('joined_from', _joined_from_clue(player['Team played for before Brighton and Hove Albion (first spell)']),
+        lambda r, f: _joined_from_clue(r['Team played for before Brighton and Hove Albion (first spell)']))
+    dob = _format_dob(player['date of birth'])
+    add('dob', f"This player was born on {dob}." if dob else "", col('date of birth'))
+    add('position', f"This player is a {player['position']}." if player['position'] else "", col('position'))
+
+    # --- Derived clues ---
+    if me.years:
+        stadiums = lambda f: tuple(s for s in STADIUMS if s in {_stadium(y) for y in f.years})
+        st = stadiums(me)
+        if st != (STADIUMS[-1],):  # "Amex only" fits most of the dataset
+            if len(st) == 1:
+                text = f"All of this player's Brighton home games were at {st[0]}."
+            elif len(st) == 2:
+                text = f"This player played home games for Brighton at both {st[0]} and {st[1]}."
+            else:
+                text = f"This player played home games for Brighton at {', '.join(st[:-1])} and {st[-1]}."
+            add('stadium', text, lambda r, f: stadiums(f))
+
+        tiers = lambda f: tuple(sorted({_league_tier(y) for y in f.years}))
+        ts = tiers(me)
+        if len(ts) >= 3:
+            add('divisions', f"This player played for Brighton in {len(ts)} different divisions.",
+                lambda r, f: len(tiers(f)) if len(tiers(f)) >= 3 else None)
+        elif len(ts) == 2:
+            add('divisions', f"This player played for Brighton in both {TIER_NAMES[ts[0]]} and {TIER_NAMES[ts[1]]}.",
+                lambda r, f: tiers(f))
+        elif ts != (1,):
+            add('divisions', f"This player never played top-flight football for Brighton, only in {TIER_NAMES[ts[0]]}.",
+                lambda r, f: tiers(f))
+
+        landmark = next((y for y in me.years if y in LANDMARK_SEASONS), None)
+        if landmark is not None:
+            add('landmark', f"This player was on Brighton's books when the club {LANDMARK_SEASONS[landmark]}.",
+                lambda r, f: landmark in f.year_set or None)
+
+        if me.birth_year:
+            age_in = lambda f: f.years[0] - f.birth_year if f.years and f.birth_year else None
+            age_out = lambda f: (f.years[-1] + 1 - f.birth_year
+                                 if f.years and f.birth_year and not f.current else None)
+            if age_in(me) <= 17:
+                add('age_in', f"This player was just {age_in(me)} when he joined Brighton.", lambda r, f: age_in(f))
+            elif age_in(me) >= 30:
+                add('age_in', f"This player was already {age_in(me)} when he arrived at Brighton.", lambda r, f: age_in(f))
+            if age_out(me) is not None and age_out(me) >= 32:
+                add('age_out', f"This player was {age_out(me)} when his Brighton career ended.", lambda r, f: age_out(f))
+
+        if len(me.years) >= 6:
+            add('longevity', f"This player spent {len(me.years)} seasons at Brighton.", lambda r, f: len(f.years))
+
+        # Pair of well-known teammates (100+ apps, 2+ shared seasons) that narrows the field most
+        def overlap(a, b):
+            return a.id != b.id and len(a.year_set & b.year_set) >= 2
+        mates = [f for f in everyone if f.apps >= 100 and overlap(me, f)]
+        best = None
+        for i, m1 in enumerate(mates):
+            for m2 in mates[i + 1:]:
+                fits = sum(1 for f in everyone
+                           if f.id not in (m1.id, m2.id) and overlap(f, m1) and overlap(f, m2))
+                if fits >= FIRST_CLUE_FITS[0] and (best is None or fits < best[0]):
+                    best = (fits, m1, m2)
+        if best:
+            _, m1, m2 = best
+            names = players_df.loc[m1.id, 'name'], players_df.loc[m2.id, 'name']
+            add('teammate', f"This player was a Brighton teammate of both {names[0]} and {names[1]}.",
+                lambda r, f: (f.id not in (m1.id, m2.id) and overlap(f, m1) and overlap(f, m2)) or None)
+
+    all_apps = [f.apps for f in everyone]
+    all_goals = [f.goals for f in everyone]
+    rank, tied = _rank(me.apps, all_apps)
+    if rank <= 15 and me.apps:
+        what = "more league appearances than any other player since 2002" if rank == 1 and not tied else \
+               f"the {'joint ' if tied else ''}{_ordinal(rank)}-most league appearances of any player since 2002"
+        add('apps_rank', f"This player has {what}.", lambda r, f: _rank(f.apps, all_apps)[0])
+    rank, tied = _rank(me.goals, all_goals)
+    if rank <= 15 and me.goals:
+        what = "the top league scorer of any player since 2002" if rank == 1 and not tied else \
+               f"the {'joint ' if tied else ''}{_ordinal(rank)}-highest league scorer of any player since 2002"
+        add('goals_rank', f"This player is {what}.", lambda r, f: _rank(f.goals, all_goals)[0])
+
+    if me.goals >= 10 and me.apps / me.goals <= 4:
+        add('rate', f"This player averaged a league goal every {me.apps / me.goals:.1f} games for Brighton.",
+            lambda r, f: round(f.apps / f.goals, 1) if f.goals else None)
+    if me.goals == 0 and me.apps >= 50:
+        add('drought', f"This player made {me.apps} league appearances without scoring a single league goal.",
+            lambda r, f: f.apps if f.goals == 0 else None)
+
+    country_counts = players_df['country of birth'].value_counts()
+    if country and country != 'England' and country_counts.get(country, 0) <= 3:
+        n = country_counts[country]
+        add('nationality', f"This player is the only {country}-born player since 2002." if n == 1 else
+            f"This player is one of only {n} {country}-born players since 2002.", col('country of birth'))
+    if place in SUSSEX_TOWNS:
+        add('local', "This player was born in Sussex.", lambda r, f: str(r['place of birth']).strip() in SUSSEX_TOWNS or None)
+
+    _candidate_cache[player.name] = candidates
+    return [dict(c) for c in candidates]
+
+
 def build_clues(player, seed=None):
     """
-    Build a list of clues for a player, avoiding clues that repeat the same facts.
-    Each clue is tagged with the facts it uses. Only one clue per fact is included.
-    Clues are organised into difficulty tiers (hard → easy) for a consistent challenge curve.
+    Pick MAX_VISIBLE_CLUES clues for a player (one per star):
+      - Clue 1: the most interesting clue that fits a handful of players, so a
+        fan can get 5 stars without it being a giveaway.
+      - Clues 2-4: interesting clues ordered broad → narrow. At least one of
+        clues 1-2 places the player in time.
+      - Clue 5: the most interesting decisive clue (fits at most DECISIVE_FITS players).
+    Only one clue per underlying fact is used.
     """
-    facts_used = set()
-    clues = []
-    # Custom logic for the 'left_for' clue
-    left_for_value = player['Team played for after Brighton and Hove Albion (first spell)']
-    seasons_str = player['seasons played at Brighton'] if player['seasons played at Brighton'] else ""
-    # An open-ended season like "2022-" already implies the player is still at the club,
-    # so suppress the redundant "still at the club" clue in that case.
-    seasons_implies_current = bool(seasons_str and str(seasons_str).strip().endswith('-'))
-    if isinstance(left_for_value, str):
-        if 'retired' in left_for_value.lower():
-            left_for_clue = ""
-        elif left_for_value.strip() == 'Still at club':
-            left_for_clue = "" if seasons_implies_current else "This player is still at the club."
-        elif left_for_value.strip() == 'Released':
-            left_for_clue = "This player was released by Brighton."
-        else:
-            left_for_clue = f"This player left Brighton to join {left_for_value}."
-    else:
-        left_for_clue = ""
-
-    # Era clue derived from seasons
-    era = _extract_era(player['seasons played at Brighton'])
-    era_clue = f"This player played for Brighton during {era}." if era else ""
-
-    # Goals clue
-    goals = player['Brighton and Hove Albion league goals']
-    goals_clue = f"This player scored {goals} league goals for Brighton." if pd.notna(goals) else ""
-
-    # Spells clue — only worth showing when the player had more than one spell
-    try:
-        spells = int(player['number of spells at Brighton and Hove Albion'])
-    except (TypeError, ValueError):
-        spells = 1
-    # Only shown when it adds information beyond the second-spell seasons clue
-    has_seasons2 = bool(player['seasons at brighton during second spell'])
-    spells_clue = (f"This player had {spells} separate spells at Brighton."
-                   if spells > 2 or (spells > 1 and not has_seasons2) else "")
-
-    dob = _format_dob(player['date of birth'])
-
-    # Define clues in difficulty tiers (vague → medium → decisive)
-    # Tier 1 (Vague): broad facts that apply to many players
-    # Only include the era clue if there's no specific seasons data (era is redundant when seasons is shown)
-    tier_1 = [
-        (era_clue if not player['seasons played at Brighton'] else "", {'era'}),
-        (f"This player was born in {player['place of birth']}, {player['country of birth']}.", {'birthplace'}),
-        (spells_clue, {'spells'}),
-        (f"Seasons at Brighton: {player['seasons played at Brighton']}" if player['seasons played at Brighton'] else "", {'seasons'}),
-        (f"Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}" if player['seasons at brighton during second spell'] else "", {'seasons2'}),
-    ]
-    # Tier 2 (Medium): narrows the field considerably
-    tier_2 = [
-        (f"This player made {player['Brighton and Hove Albion league appearances']} league appearances for Brighton.", {'appearances'}),
-        (goals_clue, {'goals'}),
-        (left_for_clue, {'left_for'}),
-    ]
-    # Tier 3 (Decisive): often identifies the player outright, so one is
-    # always held back for the final visible clue
-    tier_3 = [
-        (_joined_from_clue(player['Team played for before Brighton and Hove Albion (first spell)']), {'joined_from'}),
-        (f"This player was born on {dob}." if dob else "", {'dob'}),
-    ]
-    # Filler: weak clues (e.g. "Defender" fits ~50 players) only used if
-    # there aren't enough better clues to fill the visible slots
-    filler = [
-        (f"This player is a {player['position']}." if player['position'] else "", {'position'}),
-    ]
-
-    # Remove empty clues from each tier
-    tier_1 = [(c, t) for c, t in tier_1 if c.strip()]
-    tier_2 = [(c, t) for c, t in tier_2 if c.strip()]
-    tier_3 = [(c, t) for c, t in tier_3 if c.strip()]
-    filler = [(c, t) for c, t in filler if c.strip()]
-
-    # Shuffle within each tier deterministically.
     # Seed must NOT include the current date/time — that would reshuffle
     # clues at midnight UTC, causing reordered/duplicate clues for users
     # playing across the day boundary.  Use the player's DataFrame index
     # instead, which is stable for the lifetime of the game session.
     if seed is None:
         seed = str(player.name)
+    _all_facts()  # refresh caches if the dataset changed
+    cache_key = (player.name, str(seed))
+    if cache_key in _clue_cache:
+        return list(_clue_cache[cache_key])
+
+    candidates = _candidate_clues(player)
     rng = random.Random(seed)
-    rng.shuffle(tier_1)
-    rng.shuffle(tier_2)
-    rng.shuffle(tier_3)
+    rng.shuffle(candidates)  # random tie-break between equally interesting clues
+    candidates.sort(key=lambda c: CLUE_INTEREST.get(c['key'], 0), reverse=True)
 
-    def dedupe(clue_defs):
-        out = []
-        for clue, tags in clue_defs:
-            if not tags & facts_used:  # Only add if none of the tags have been used
-                out.append(clue)
-                facts_used.update(tags)
-        return out
+    chosen = []
+    used_facts = set()
 
-    # The frontend only shows MAX_VISIBLE_CLUES clues, so reserve the last
-    # visible slot for a decisive clue rather than letting it fall off the end.
-    # Filler only reaches the visible slots when there aren't enough early clues.
-    early = dedupe(tier_1 + tier_2) + dedupe(filler)
-    decisive = dedupe(tier_3)
-    n_early = MAX_VISIBLE_CLUES - 1
-    return early[:n_early] + decisive[:1] + early[n_early:] + decisive[1:]
+    def take(pool):
+        c = pool[0]
+        chosen.append(c)
+        used_facts.add(FACT_GROUPS.get(c['key'], c['key']))
+
+    def available(pred=lambda c: True):
+        return [c for c in candidates if c not in chosen
+                and FACT_GROUPS.get(c['key'], c['key']) not in used_facts and pred(c)]
+
+    lo, hi = FIRST_CLUE_FITS
+    interest = lambda c: CLUE_INTEREST.get(c['key'], 0)
+    first = (available(lambda c: lo <= c['fits'] <= hi and c['key'] != 'position')
+             # Broad but interesting (e.g. "all home games at Withdean")
+             or available(lambda c: c['fits'] > hi and interest(c) >= 3)
+             # Sparse-data players: a near-decisive interesting clue beats "scored 0 goals" (fits 77)
+             or available(lambda c: c['fits'] == DECISIVE_FITS and interest(c) >= 2)
+             or available(lambda c: interest(c) >= 3)
+             or available(lambda c: c['key'] != 'position')
+             or available())
+    if first:
+        take(first)
+
+    # Hold back the decisive clue for the final slot
+    decisive = available(lambda c: c['fits'] <= DECISIVE_FITS)
+    final = decisive[0] if decisive else None
+    if final:
+        used_facts.add(FACT_GROUPS.get(final['key'], final['key']))
+
+    middle_slots = MAX_VISIBLE_CLUES - len(chosen) - (1 if final else 0)
+    # Pin a clue that places the player in time to slot 2, unless the only
+    # such clue is decisive (e.g. exact seasons) — then let it sort naturally.
+    if chosen and chosen[0]['key'] not in ERA_CLUES and middle_slots > 0:
+        era = available(lambda c: c['key'] in ERA_CLUES and c['fits'] > DECISIVE_FITS)
+        if era:
+            take(era)
+            middle_slots -= 1
+    n_before_middle = len(chosen)
+    not_position = lambda c: c['key'] != 'position'
+    for _ in range(middle_slots):
+        # Prefer clues that don't give it away; position only as a last resort
+        pool = (available(lambda c: c['fits'] > DECISIVE_FITS and not_position(c))
+                or available(not_position) or available())
+        if not pool:
+            break
+        take(pool)
+    # Broad → narrow within the middle clues
+    chosen[n_before_middle:] = sorted(chosen[n_before_middle:], key=lambda c: c['fits'], reverse=True)
+    if final:
+        chosen.append(final)
+
+    clues = [c['text'] for c in chosen]
+    _clue_cache[cache_key] = clues
+    return list(clues)
+
 
 # --- API Routes ---
 @app.route('/api/daily-challenge', methods=['GET'])  # Define a web API endpoint for the daily challenge
