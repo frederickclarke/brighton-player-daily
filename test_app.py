@@ -245,11 +245,61 @@ class TestBuildClues:
         clues = app_module.build_clues(sample_player, seed=42)
         assert not any("second spell" in c.lower() for c in clues)
 
-    def test_no_duplicate_facts(self, sample_player):
+    def test_second_spell_seasons_preferred_over_spell_count(self, second_spell_player):
+        """With 2 spells, the specific second-spell seasons clue makes '2 separate spells' redundant."""
+        for seed in range(20):
+            clues = app_module.build_clues(second_spell_player, seed=seed)
+            assert any("second spell" in c for c in clues)
+            assert not any("separate spells" in c for c in clues)
+
+    def test_three_spell_player_gets_spell_count(self):
+        df = app_module.players_df
+        player = df[df["number of spells at Brighton and Hove Albion"].astype(str) == "3"].iloc[0]
+        clues = app_module.build_clues(player, seed=42)
+        assert any("3 separate spells" in c for c in clues)
+
+    def test_no_spell_s_wording(self):
+        """The clunky 'spell(s)' wording should never appear."""
+        for idx in range(len(app_module.players_df)):
+            clues = app_module.build_clues(app_module.players_df.iloc[idx], seed=42)
+            assert not any("spell(s)" in c for c in clues)
+
+    def test_dob_clue_reachable(self):
+        """The date-of-birth clue used to be permanently deduped away by the birthplace clue."""
+        df = app_module.players_df
+        assert any(
+            any("was born on" in c for c in app_module.build_clues(df.iloc[i]))
+            for i in range(len(df))
+        )
+
+    def test_birthplace_and_dob_both_present(self, sample_player):
         clues = app_module.build_clues(sample_player, seed=42)
-        birth_full = [c for c in clues if "was born on" in c]
-        birth_spells = [c for c in clues if "was born in" in c and "spell(s)" in c]
-        assert not (birth_full and birth_spells), "Both birth clues present — fact dedup failed"
+        assert any("was born in" in c for c in clues)
+        assert any("was born on" in c for c in clues)
+
+    def test_last_visible_clue_is_decisive(self):
+        """The final clue the frontend shows should be a decisive one (previous club or DOB)."""
+        n = app_module.MAX_VISIBLE_CLUES
+        decisive_markers = ("was born on", "joined Brighton", "came through", "arrived at Brighton",
+                            "loaned out to", "free agent")
+        for idx in range(len(app_module.players_df)):
+            player = app_module.players_df.iloc[idx]
+            clues = app_module.build_clues(player)
+            if len(clues) >= n:
+                assert any(m in clues[n - 1] for m in decisive_markers), (
+                    f"{player['name']}: clue {n} is not decisive: {clues[n - 1]}"
+                )
+
+    def test_position_not_in_first_clue(self):
+        """Position is a weak filler clue and should never be the 5-star clue."""
+        for idx in range(len(app_module.players_df)):
+            clues = app_module.build_clues(app_module.players_df.iloc[idx])
+            assert not clues[0].startswith("This player is a ")
+
+    def test_every_player_has_enough_visible_clues(self):
+        for idx in range(len(app_module.players_df)):
+            clues = app_module.build_clues(app_module.players_df.iloc[idx])
+            assert len(clues) >= app_module.MAX_VISIBLE_CLUES
 
     def test_clue_count_range(self):
         for idx in range(min(20, len(app_module.players_df))):
@@ -613,6 +663,40 @@ class TestSpecialCharacters:
 # ---------------------------------------------------------------------------
 
 class TestClueLogic:
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("Youth", "This player came through Brighton's academy."),
+        ("Arsenal (youth)", "This player came through the youth ranks at Arsenal before joining Brighton."),
+        ("Brentford (loan)", "This player first arrived at Brighton on loan from Brentford."),
+        ("Union SG (loan from Brighton)", "While on Brighton's books, this player was loaned out to Union SG."),
+        ("Unattached (previously Brighton coach)", "This player joined Brighton as a free agent."),
+        ("Fulham", "This player joined Brighton from Fulham."),
+        ("", ""),
+    ])
+    def test_joined_from_clue_formatting(self, raw, expected):
+        assert app_module._joined_from_clue(raw) == expected
+
+    def test_no_raw_parenthetical_notes_in_clues(self):
+        """Raw CSV notes like '(youth)' or '(loan)' must never leak into clue text."""
+        for idx in range(len(app_module.players_df)):
+            for clue in app_module.build_clues(app_module.players_df.iloc[idx]):
+                assert "(youth)" not in clue and "(loan" not in clue, clue
+                assert "Self-Proclaimed" not in clue
+
+    @pytest.mark.parametrize("raw, expected", [
+        ("16-Jan-81", "16 January 1981"),
+        ("04-Jan-99", "4 January 1999"),
+        ("12-Mar-02", "12 March 2002"),
+        ("26-Jun-74", "26 June 1974"),
+        ("", ""),
+        ("not a date", ""),
+    ])
+    def test_format_dob(self, raw, expected):
+        assert app_module._format_dob(raw) == expected
+
+    def test_all_dobs_parse(self):
+        for dob in app_module.players_df["date of birth"]:
+            assert app_module._format_dob(dob), f"Unparseable DOB: {dob!r}"
 
     def test_era_clue_suppressed_when_seasons_exist(self):
         """Era clue ('played during the 2010s') should not appear when seasons data exists."""

@@ -6,6 +6,7 @@ from flask import Flask, jsonify, request, render_template  # Import Flask and r
 import random
 from dotenv import load_dotenv
 import json
+import re
 
 load_dotenv()
 
@@ -246,6 +247,44 @@ def _extract_era(seasons_str):
         return f"the {decades[0]}s"
     return f"the {decades[0]}s and {decades[-1]}s"
 
+# Must match the frontend, which moves to give-up mode after the 5th clue
+MAX_VISIBLE_CLUES = 5
+
+
+def _format_dob(dob_str):
+    """'16-Jan-81' → '16 January 1981'. Returns '' if unparseable."""
+    try:
+        dob = datetime.strptime(str(dob_str).strip(), '%d-%b-%y')
+    except ValueError:
+        return ""
+    # %y pivots at 1969, but no player in the dataset is born after the current year
+    if dob.year > datetime.now().year:
+        dob = dob.replace(year=dob.year - 100)
+    return f"{dob.day} {dob.strftime('%B %Y')}"
+
+
+def _joined_from_clue(value):
+    """Turn the raw 'Team played for before Brighton' value into readable clue text."""
+    value = str(value).strip() if value else ""
+    if not value:
+        return ""
+    if value.lower() == 'youth':
+        return "This player came through Brighton's academy."
+    if value.lower().startswith('unattached'):
+        return "This player joined Brighton as a free agent."
+    m = re.match(r'^(.*?)\s*\((.*)\)$', value)
+    if m:
+        club, note = m.group(1).strip(), m.group(2).strip().lower()
+        if note == 'youth':
+            return f"This player came through the youth ranks at {club} before joining Brighton."
+        if note == 'loan':
+            return f"This player first arrived at Brighton on loan from {club}."
+        if note == 'loan from brighton':
+            return f"While on Brighton's books, this player was loaned out to {club}."
+        value = club
+    return f"This player joined Brighton from {value}."
+
+
 def build_clues(player, seed=None):
     """
     Build a list of clues for a player, avoiding clues that repeat the same facts.
@@ -268,7 +307,7 @@ def build_clues(player, seed=None):
         elif left_for_value.strip() == 'Released':
             left_for_clue = "This player was released by Brighton."
         else:
-            left_for_clue = f"This player left Brighton to join {left_for_value}"
+            left_for_clue = f"This player left Brighton to join {left_for_value}."
     else:
         left_for_clue = ""
 
@@ -280,12 +319,25 @@ def build_clues(player, seed=None):
     goals = player['Brighton and Hove Albion league goals']
     goals_clue = f"This player scored {goals} league goals for Brighton." if pd.notna(goals) else ""
 
-    # Define clues in difficulty tiers (hard → medium → easy)
-    # Tier 1 (Hard/vague): broad facts that apply to many players
+    # Spells clue — only worth showing when the player had more than one spell
+    try:
+        spells = int(player['number of spells at Brighton and Hove Albion'])
+    except (TypeError, ValueError):
+        spells = 1
+    # Only shown when it adds information beyond the second-spell seasons clue
+    has_seasons2 = bool(player['seasons at brighton during second spell'])
+    spells_clue = (f"This player had {spells} separate spells at Brighton."
+                   if spells > 2 or (spells > 1 and not has_seasons2) else "")
+
+    dob = _format_dob(player['date of birth'])
+
+    # Define clues in difficulty tiers (vague → medium → decisive)
+    # Tier 1 (Vague): broad facts that apply to many players
     # Only include the era clue if there's no specific seasons data (era is redundant when seasons is shown)
     tier_1 = [
         (era_clue if not player['seasons played at Brighton'] else "", {'era'}),
-        (f"This player was born in {player['place of birth']}, {player['country of birth']} and has {player['number of spells at Brighton and Hove Albion']} spell(s) at Brighton.", {'birth', 'spells'}),
+        (f"This player was born in {player['place of birth']}, {player['country of birth']}.", {'birthplace'}),
+        (spells_clue, {'spells'}),
         (f"Seasons at Brighton: {player['seasons played at Brighton']}" if player['seasons played at Brighton'] else "", {'seasons'}),
         (f"Seasons at Brighton during second spell: {player['seasons at brighton during second spell']}" if player['seasons at brighton during second spell'] else "", {'seasons2'}),
     ]
@@ -293,19 +345,25 @@ def build_clues(player, seed=None):
     tier_2 = [
         (f"This player made {player['Brighton and Hove Albion league appearances']} league appearances for Brighton.", {'appearances'}),
         (goals_clue, {'goals'}),
-        (f"This player joined Brighton from {player['Team played for before Brighton and Hove Albion (first spell)']}", {'joined_from'}),
         (left_for_clue, {'left_for'}),
     ]
-    # Tier 3 (Easy/most revealing): strongly identifies the player
+    # Tier 3 (Decisive): often identifies the player outright, so one is
+    # always held back for the final visible clue
     tier_3 = [
-        (f"This player is a {player['position']}.", {'position'}),
-        (f"This player was born on {player['date of birth']}, in {player['place of birth']}, {player['country of birth']}.", {'birth'}),
+        (_joined_from_clue(player['Team played for before Brighton and Hove Albion (first spell)']), {'joined_from'}),
+        (f"This player was born on {dob}." if dob else "", {'dob'}),
+    ]
+    # Filler: weak clues (e.g. "Defender" fits ~50 players) only used if
+    # there aren't enough better clues to fill the visible slots
+    filler = [
+        (f"This player is a {player['position']}." if player['position'] else "", {'position'}),
     ]
 
     # Remove empty clues from each tier
     tier_1 = [(c, t) for c, t in tier_1 if c.strip()]
     tier_2 = [(c, t) for c, t in tier_2 if c.strip()]
     tier_3 = [(c, t) for c, t in tier_3 if c.strip()]
+    filler = [(c, t) for c, t in filler if c.strip()]
 
     # Shuffle within each tier deterministically.
     # Seed must NOT include the current date/time — that would reshuffle
@@ -319,14 +377,21 @@ def build_clues(player, seed=None):
     rng.shuffle(tier_2)
     rng.shuffle(tier_3)
 
-    # Present tiers in order: hard first, easy last
-    clue_defs = tier_1 + tier_2 + tier_3
+    def dedupe(clue_defs):
+        out = []
+        for clue, tags in clue_defs:
+            if not tags & facts_used:  # Only add if none of the tags have been used
+                out.append(clue)
+                facts_used.update(tags)
+        return out
 
-    for clue, tags in clue_defs:
-        if not tags & facts_used:  # Only add if none of the tags have been used
-            clues.append(clue)
-            facts_used.update(tags)
-    return clues
+    # The frontend only shows MAX_VISIBLE_CLUES clues, so reserve the last
+    # visible slot for a decisive clue rather than letting it fall off the end.
+    # Filler only reaches the visible slots when there aren't enough early clues.
+    early = dedupe(tier_1 + tier_2) + dedupe(filler)
+    decisive = dedupe(tier_3)
+    n_early = MAX_VISIBLE_CLUES - 1
+    return early[:n_early] + decisive[:1] + early[n_early:] + decisive[1:]
 
 # --- API Routes ---
 @app.route('/api/daily-challenge', methods=['GET'])  # Define a web API endpoint for the daily challenge
