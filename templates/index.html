@@ -1148,12 +1148,11 @@
         const changeBtn = document.getElementById('change-player-btn');
         if (changeBtn) {
           changeBtn.addEventListener('click', function() {
-            // For now, hardcode 163 as the number of players (or update if needed)
-            const randomIdx = Math.floor(Math.random() * 163);
+            // The server picks a random player from the same eligible pool as the daily selection
             fetch('/api/set-player', {
               method: 'POST',
               headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({player_id: randomIdx})
+              body: JSON.stringify({random: true})
             }).then(res => res.json())
               .then(data => {
                 if (data.success) {

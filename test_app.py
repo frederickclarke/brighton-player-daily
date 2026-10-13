@@ -5,7 +5,7 @@ Run with:  pytest test_app.py -v
 """
 
 import json
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
@@ -68,9 +68,10 @@ def second_spell_player():
 
 @pytest.fixture
 def mock_recent_players_file(tmp_path):
-    """Redirect recent_players.json to a temp directory."""
+    """Redirect recent_players.json and cycle_state.json to a temp directory."""
     temp_file = str(tmp_path / "recent_players.json")
-    with patch.object(app_module, "RECENT_PLAYERS_FILE", temp_file):
+    with patch.object(app_module, "RECENT_PLAYERS_FILE", temp_file), \
+         patch.object(app_module, "CYCLE_STATE_FILE", str(tmp_path / "cycle_state.json")):
         yield temp_file
 
 
@@ -84,7 +85,7 @@ class TestDataIntegrity:
         assert len(app_module.players_df) > 0
 
     def test_expected_row_count(self):
-        assert len(app_module.players_df) == 183
+        assert len(app_module.players_df) == 193
 
     def test_all_required_columns_present(self):
         required = [
@@ -130,6 +131,19 @@ class TestDataIntegrity:
     def test_appearances_are_numeric(self):
         for _, row in app_module.players_df.iterrows():
             int(row["Brighton and Hove Albion league appearances"])
+
+    def test_departed_players_have_closed_first_spell(self):
+        """A player who has left (single spell) shouldn't have an open-ended '2020-' seasons range."""
+        for _, row in app_module.players_df.iterrows():
+            left_for = row["Team played for after Brighton and Hove Albion (first spell)"]
+            seasons = str(row["seasons played at Brighton"]).strip()
+            if left_for != "Still at club":
+                assert not seasons.endswith("-"), f"{row['name']} left ({left_for}) but seasons is '{seasons}'"
+
+    def test_still_at_club_players_have_open_seasons(self):
+        for _, row in app_module.players_df.iterrows():
+            if row["Team played for after Brighton and Hove Albion (first spell)"] == "Still at club":
+                assert str(row["seasons played at Brighton"]).strip().endswith("-"), row["name"]
 
 
 # ---------------------------------------------------------------------------
@@ -201,6 +215,21 @@ class TestBuildClues:
         for clue in clues:
             assert "left Brighton to join" not in clue
             assert "Retired" not in clue
+
+    def test_unattached_retired_excludes_left_for(self):
+        df = app_module.players_df
+        player = df[df["name"] == "Mauricio Taricco"].iloc[0]
+        clues = app_module.build_clues(player, seed=42)
+        for clue in clues:
+            assert "left Brighton to join" not in clue
+            assert "retired" not in clue.lower()
+
+    def test_released_player_gets_released_clue(self):
+        df = app_module.players_df
+        player = df[df["name"] == "Solly March"].iloc[0]
+        clues = app_module.build_clues(player, seed=42)
+        assert not any("join Released" in c for c in clues)
+        assert any(c == "This player was released by Brighton." for c in clues)
 
     def test_still_at_club_suppressed_when_seasons_open_ended(self, still_at_club_player):
         """'Still at club' clue is redundant when seasons already shows an open-ended range like '2010-'."""
@@ -282,17 +311,14 @@ class TestGetDailyPlayer:
         assert p1["name"] == p2["name"]
 
     def test_no_repeats_in_full_cycle(self, mock_recent_players_file):
-        """Verify the permutation cycle selects every eligible player exactly once."""
-        import random
-        eligible = [idx for idx in range(len(app_module.players_df))
-                    if app_module.players_df.iloc[idx]['Brighton and Hove Albion league appearances'] > 0]
-        pool_size = len(eligible)
-        # Simulate one full cycle (cycle 0)
-        rng = random.Random(0)
-        shuffled = list(eligible)
-        rng.shuffle(shuffled)
-        assert len(set(shuffled)) == pool_size  # no duplicates
-        assert set(shuffled) == set(eligible)   # all players covered
+        """Each cycle selects every eligible player exactly once."""
+        start, order = app_module.get_cycle_order(date(2026, 10, 13))
+        assert len(order) == len(set(order))
+        assert set(order) == set(app_module._eligible_names())
+        next_start, next_order = app_module.get_cycle_order(start + timedelta(days=len(order)))
+        assert next_start == start + timedelta(days=len(order))
+        assert len(next_order) == len(set(next_order))
+        assert set(next_order) == set(app_module._eligible_names())
 
     def test_debug_override(self, mock_recent_players_file):
         app_module.app.debug = True
@@ -301,6 +327,52 @@ class TestGetDailyPlayer:
         assert player["name"] == app_module.players_df.iloc[50]["name"]
         app_module.current_player_index = None
         app_module.app.debug = False
+
+    def test_bootstrap_continues_legacy_cycle(self, mock_recent_players_file):
+        """The cycle in progress at the switch to name-based state keeps its schedule."""
+        start, order = app_module.get_cycle_order(date(2026, 10, 13))
+        assert start == date(2026, 7, 2)
+        assert order[(date(2026, 10, 13) - start).days] == "Mahmoud Dahoud"
+
+    def test_bootstrap_names_exist_and_are_eligible(self):
+        with open(app_module.CYCLE_BOOTSTRAP_FILE) as f:
+            order = json.load(f)["order"]
+        assert len(order) == len(set(order))
+        missing = set(order) - set(app_module._eligible_names())
+        assert not missing, f"Bootstrap names not eligible in CSV: {missing}"
+
+    def test_new_players_appended_without_reshuffling(self, mock_recent_players_file):
+        """Adding an eligible player mid-cycle must not change any scheduled day."""
+        today = date(2026, 10, 13)
+        start, before = app_module.get_cycle_order(today)
+        new_row = app_module.players_df.iloc[0].copy()
+        new_row["name"] = "Test Signing"
+        new_row["Brighton and Hove Albion league appearances"] = 3
+        bigger_df = pd.concat([app_module.players_df, new_row.to_frame().T], ignore_index=True)
+        with patch.object(app_module, "players_df", bigger_df):
+            start_after, after = app_module.get_cycle_order(today)
+        assert start_after == start
+        assert after[:len(before)] == before
+        assert after[len(before):] == ["Test Signing"]
+
+    def test_new_cycle_order_is_persisted(self, mock_recent_players_file):
+        """Once a new cycle starts, its order is saved and survives later CSV additions."""
+        start, order = app_module.get_cycle_order(date(2026, 10, 13))
+        next_day = start + timedelta(days=len(order))
+        next_start, next_order = app_module.get_cycle_order(next_day)
+        with open(app_module.CYCLE_STATE_FILE) as f:
+            saved = json.load(f)
+        assert saved["cycle_start"] == next_start.isoformat()
+        assert saved["order"] == next_order
+
+        new_row = app_module.players_df.iloc[0].copy()
+        new_row["name"] = "Test Signing"
+        new_row["Brighton and Hove Albion league appearances"] = 1
+        bigger_df = pd.concat([app_module.players_df, new_row.to_frame().T], ignore_index=True)
+        with patch.object(app_module, "players_df", bigger_df):
+            _, later_order = app_module.get_cycle_order(next_day + timedelta(days=5))
+        assert later_order[:len(next_order)] == next_order
+        assert later_order[-1] == "Test Signing"
 
     def test_caches_selection(self, mock_recent_players_file):
         app_module.app.debug = False
@@ -407,6 +479,19 @@ class TestDebugEndpoints:
         resp = debug_client.post("/api/set-player", json={"player_id": 5})
         assert resp.status_code == 200
         assert resp.get_json()["success"] is True
+
+    def test_set_player_random_only_picks_eligible(self, debug_client):
+        """The debug 'Change Player' button must never land on a zero-appearance player."""
+        eligible = set(app_module._eligible_names())
+        seen = set()
+        for _ in range(300):
+            resp = debug_client.post("/api/set-player", json={"random": True})
+            assert resp.status_code == 200
+            name = app_module.players_df.iloc[app_module.current_player_index]["name"]
+            assert name in eligible
+            seen.add(app_module.current_player_index)
+        # Rows added after the original 163 (e.g. new signings) must be reachable too
+        assert max(seen) >= 163
 
     def test_set_player_invalid_index(self, debug_client):
         resp = debug_client.post("/api/set-player", json={"player_id": 9999})

@@ -3,3 +3,6 @@
 
 # Python virtual environment
 venv/
+# Local selection cycle state (lives on the Fly volume in production)
+cycle_state.json
+cycle_state.json.tmp

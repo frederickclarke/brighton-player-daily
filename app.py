@@ -97,9 +97,68 @@ current_player_index = None  # Global override for local testing
 DATA_DIR = os.environ.get('DATA_DIR', '.')
 RECENT_PLAYERS_FILE = os.path.join(DATA_DIR, 'recent_players.json')
 
-# Epoch date for the deterministic player cycle (calibrated so existing
-# daily selections are preserved when the algorithm was introduced)
-CYCLE_EPOCH = datetime(2025, 2, 25).date()
+# The running order of the current selection cycle (player names) lives on the
+# persistent volume so that adding players to the CSV never reshuffles days
+# that are already scheduled. The bootstrap file seeds it the first time.
+CYCLE_STATE_FILE = os.path.join(DATA_DIR, 'cycle_state.json')
+CYCLE_BOOTSTRAP_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cycle_bootstrap.json')
+
+def _eligible_names():
+    """Names of players with at least 1 league appearance, in CSV order."""
+    apps = players_df['Brighton and Hove Albion league appearances']
+    return players_df.loc[apps > 0, 'name'].tolist()
+
+def _shuffled_names(names, seed_date):
+    """Deterministic shuffle of player names, seeded by a cycle's start date."""
+    shuffled = sorted(names)
+    random.Random(seed_date.isoformat()).shuffle(shuffled)
+    return shuffled
+
+def load_cycle_state():
+    """Return (cycle_start, order) from the saved state, falling back to the bootstrap."""
+    for path in (CYCLE_STATE_FILE, CYCLE_BOOTSTRAP_FILE):
+        try:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            return datetime.fromisoformat(data['cycle_start']).date(), list(data['order'])
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, ValueError):
+            continue
+    raise RuntimeError("No cycle state or bootstrap file available")
+
+def save_cycle_state(cycle_start, order):
+    tmp_path = CYCLE_STATE_FILE + '.tmp'
+    with open(tmp_path, 'w') as f:
+        json.dump({'cycle_start': cycle_start.isoformat(), 'order': order}, f, indent=1, ensure_ascii=False)
+    os.replace(tmp_path, CYCLE_STATE_FILE)
+
+def get_cycle_order(today):
+    """Return (cycle_start, order) for the cycle containing `today`.
+
+    Every eligible player appears exactly once per cycle. Players who become
+    eligible mid-cycle (new signings, first appearances) are appended to the
+    end of the current cycle, so days that are already scheduled never change.
+    A new cycle's order is fixed and saved on the day it starts.
+    """
+    cycle_start, order = load_cycle_state()
+    eligible = _eligible_names()
+    eligible_set = set(eligible)
+
+    scheduled = [name for name in order if name in eligible_set]
+    newcomers = _shuffled_names([name for name in eligible if name not in set(scheduled)], cycle_start)
+    changed = scheduled != order or bool(newcomers)
+    order = scheduled + newcomers
+
+    while (today - cycle_start).days >= len(order):
+        cycle_start += timedelta(days=len(order))
+        order = _shuffled_names(eligible, cycle_start)
+        changed = True
+
+    if changed:
+        try:
+            save_cycle_state(cycle_start, order)
+        except Exception as e:
+            print(f"WARNING: Could not save cycle_state.json: {e}")
+    return cycle_start, order
 
 def load_recent_players():
     """Load the list of recently selected players from file."""
@@ -130,7 +189,11 @@ def set_player():
     if not app.debug:
         return jsonify({'error': 'Not allowed in production'}), 403
     data = request.json
-    idx = int(data.get('player_id', 0))
+    if data.get('random'):
+        eligible = set(_eligible_names())
+        idx = random.choice([i for i, name in enumerate(players_df['name']) if name in eligible])
+    else:
+        idx = int(data.get('player_id', 0))
     if 0 <= idx < len(players_df):
         current_player_index = idx
         return jsonify({'success': True})
@@ -138,12 +201,9 @@ def set_player():
         return jsonify({'error': 'Invalid player index'}), 400
 
 def get_daily_player():
-    """Get today's player using a deterministic permutation cycle.
+    """Get today's player from the current selection cycle (see get_cycle_order).
 
-    Players are selected via a seeded shuffle that guarantees every eligible
-    player is chosen exactly once before the cycle restarts. This is fully
-    deterministic — no file storage is needed for correctness — but we still
-    record selections in recent_players.json for the debug endpoint.
+    Selections are also recorded in recent_players.json for the debug endpoint.
     """
     global current_player_index
 
@@ -152,23 +212,10 @@ def get_daily_player():
         return player
 
     today = datetime.now().date()
-
-    # Get all player indices that have at least 1 league appearance
-    eligible_indices = [idx for idx in range(len(players_df))
-                        if players_df.iloc[idx]['Brighton and Hove Albion league appearances'] > 0]
-    pool_size = len(eligible_indices)
-
-    # Calculate which day of the overall cycle we're on
-    day_number = (today - CYCLE_EPOCH).days
-    cycle_number = day_number // pool_size
-    position_in_cycle = day_number % pool_size
-
-    # Seed RNG with the cycle number to produce a unique permutation per cycle
-    rng = random.Random(cycle_number)
-    shuffled = list(eligible_indices)
-    rng.shuffle(shuffled)
-
-    selected_index = shuffled[position_in_cycle]
+    cycle_start, order = get_cycle_order(today)
+    position_in_cycle = max((today - cycle_start).days, 0)
+    selected_name = order[position_in_cycle]
+    selected_index = int(players_df.index[players_df['name'] == selected_name][0])
 
     # Record this selection in recent_players.json (for debug/history)
     try:
@@ -183,7 +230,7 @@ def get_daily_player():
         print(f"WARNING: Could not save recent_players.json: {e}")
 
     player = players_df.iloc[selected_index]
-    print(f"DEBUG: Cycle {cycle_number}, position {position_in_cycle}/{pool_size}, selected: {player['name']}")
+    print(f"DEBUG: Cycle from {cycle_start}, position {position_in_cycle}/{len(order)}, selected: {player['name']}")
     return player
 
 def _extract_era(seasons_str):
@@ -214,10 +261,12 @@ def build_clues(player, seed=None):
     # so suppress the redundant "still at the club" clue in that case.
     seasons_implies_current = bool(seasons_str and str(seasons_str).strip().endswith('-'))
     if isinstance(left_for_value, str):
-        if 'Retired' in left_for_value:
+        if 'retired' in left_for_value.lower():
             left_for_clue = ""
         elif left_for_value.strip() == 'Still at club':
             left_for_clue = "" if seasons_implies_current else "This player is still at the club."
+        elif left_for_value.strip() == 'Released':
+            left_for_clue = "This player was released by Brighton."
         else:
             left_for_clue = f"This player left Brighton to join {left_for_value}"
     else:
